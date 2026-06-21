@@ -1886,3 +1886,245 @@ tbody tr.checked.selected { box-shadow: inset 3px 0 0 var(--ink); }
 .dupe-names { display: flex; flex-wrap: wrap; gap: 10px; font-size: 13px; }
 .dupe-names span { color: var(--text); }
 .dupe-names em { color: var(--muted-2); font-style: normal; font-size: 12px; }
+
+/* ============================================================
+   Simplified sales lead desk
+   ============================================================ */
+
+/* Sidebar: list navigation */
+.nav-label {
+  margin: 14px 6px 4px;
+  color: #9a9384;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.sidebar nav {
+  overflow-y: auto;
+}
+.sidebar nav button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.sidebar-foot {
+  margin-top: auto;
+  padding-top: 12px;
+}
+.sidebar-signout {
+  width: 100%;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(11, 11, 9, 0.16);
+  border-radius: 8px;
+  background: transparent;
+  color: #6b6256;
+  font-size: 13px;
+  cursor: pointer;
+}
+.sidebar-signout:hover {
+  color: #b02a2a;
+  border-color: rgba(176, 42, 42, 0.4);
+  background: rgba(176, 42, 42, 0.06);
+}
+.sidebar.collapsed .sidebar-signout span { display: none; }
+
+/* Stat row — wraps to fit any number of cards */
+.stats-grid.simple-stats {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+}
+.tone-slate .stat-icon { color: #64748b; background: rgba(100, 116, 139, 0.12); }
+.tone-red .stat-icon { color: #c0392b; background: rgba(192, 57, 43, 0.12); }
+
+/* Legend mapping each colored dot to its meaning */
+.mark-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  margin: 4px 0 12px;
+  padding: 10px 14px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #fffdf7;
+  font-size: 12px;
+  color: var(--text);
+}
+.mark-legend .legend-label {
+  color: var(--muted);
+  font-weight: 600;
+}
+.legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.mark-dot.legend-dot {
+  width: 22px;
+  height: 22px;
+  cursor: default;
+}
+.mark-dot.legend-dot:hover { transform: none; }
+
+/* Simplified table */
+table.simple-table {
+  min-width: 720px;
+}
+.simple-table th.marks-head {
+  width: 230px;
+}
+.mark-dots {
+  display: flex;
+  gap: 6px;
+}
+
+/* Instant hover tooltip naming each dot */
+.mark-dots .mark-dot {
+  position: relative;
+}
+.mark-dots .mark-dot[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  padding: 5px 9px;
+  border-radius: 6px;
+  background: #0b0b09;
+  color: #fffaf0;
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+.mark-dots .mark-dot[data-tip]:hover::before {
+  content: "";
+  position: absolute;
+  bottom: calc(100% + 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  border: 5px solid transparent;
+  border-top-color: #0b0b09;
+  pointer-events: none;
+}
+.mark-dot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1px solid rgba(11, 11, 9, 0.18);
+  background: #fffdf7;
+  color: #9a9384;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease, color 0.12s ease;
+}
+.mark-dot:hover { transform: scale(1.1); border-color: #c96b32; }
+.mark-empty {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: rgba(11, 11, 9, 0.12);
+}
+.mark-dot.on { color: #fff; border-color: transparent; }
+.mark-dot.green.on { background: var(--green); }
+.mark-dot.blue.on { background: var(--blue); }
+.mark-dot.purple.on { background: var(--purple); }
+.mark-dot.amber.on { background: var(--amber); }
+.mark-dot.slate.on { background: #64748b; }
+.mark-dot.red.on { background: #c0392b; }
+
+/* Detail panel: big mark buttons + comments */
+.mark-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.mark-button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+  padding: 12px 13px;
+  border: 1.5px solid var(--line-soft);
+  border-radius: 10px;
+  background: #fffdf7;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+  transition: transform 0.12s ease, border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.mark-button:hover { transform: translateY(-1px); border-color: #c96b32; }
+.mark-button strong { font-size: 14px; }
+.mark-button small { color: var(--muted); font-size: 11px; }
+.mark-button.on { color: #fff; border-color: transparent; box-shadow: 0 8px 20px rgba(72, 54, 31, 0.18); }
+.mark-button.on small { color: rgba(255, 255, 255, 0.85); }
+.mark-button.green.on { background: var(--green); }
+.mark-button.blue.on { background: var(--blue); }
+.mark-button.purple.on { background: var(--purple); }
+.mark-button.amber.on { background: var(--amber); }
+.mark-button.slate.on { background: #64748b; }
+.mark-button.red.on { background: #c0392b; }
+
+.block-label {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.comment-box {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+}
+.comment-box textarea {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line-soft);
+  border-radius: 8px;
+  background: #fffdf7;
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+}
+.comment-box textarea:focus { outline: none; border-color: #c96b32; }
+.comment-box .button { justify-self: start; }
+
+.comment-list {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+.comment-list li {
+  padding: 9px 11px;
+  border: 1px solid var(--line-soft);
+  border-left: 3px solid #c96b32;
+  border-radius: 6px;
+  background: #fffdf7;
+}
+.comment-date {
+  display: block;
+  margin-bottom: 3px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.comment-list li p { margin: 0; font-size: 13px; color: var(--text); }
+
+.detail-info {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-soft);
+  display: grid;
+  gap: 10px;
+}

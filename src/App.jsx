@@ -70,6 +70,7 @@ const STATUS_OPTIONS = [
 const PROPOSAL_OPTIONS = ["None", "Drafting", "Sent", "Approved", "Rejected", "Closed"];
 const OWNERS = ["Unassigned", "Rishav", "Vansh", "Sales Team", "Design", "Ops"];
 const PAGE_SIZE = 100;
+const EXPORT_PASSWORD = "vansh1379";
 const VIEWS = ["command", "followups", "leads", "outreach", "proposals", "clients", "reports", "settings"];
 
 // The magic-link redirect lands with #access_token=…&refresh_token=… in the hash.
@@ -139,6 +140,44 @@ function followUpState(lead) {
   if (lead.nextFollowUp < todayIso) return "overdue";
   if (lead.nextFollowUp === todayIso) return "today";
   return "upcoming";
+}
+
+// Simplified sales model: six marks per lead, stored on existing columns so no
+// schema change is needed. Some pairs are mutually exclusive and clear each other.
+//   Verified / Wrong lead  -> status ("Verified" / "Wrong Number") — share the field
+//   Approached             -> whatsapp_sent
+//   Interested / Un-interested -> whatsapp_replied / proposal_status="Rejected"
+//   Meeting                -> email_sent
+const MARKS = [
+  { key: "verified", label: "Verified", hint: "Lead info is correct", icon: CheckCircle2, tone: "green", get: (l) => l.status === "Verified", patch: (v) => ({ status: v ? "Verified" : "Not Contacted" }) },
+  { key: "approached", label: "Approached", hint: "Reached out to them", icon: MessageCircle, tone: "blue", get: (l) => Boolean(l.whatsappSent), patch: (v) => ({ whatsappSent: v }) },
+  { key: "interested", label: "Interested", hint: "It's a real lead", icon: Sparkles, tone: "purple", get: (l) => Boolean(l.whatsappReplied), patch: (v) => (v ? { whatsappReplied: true, proposalStatus: "None" } : { whatsappReplied: false }) },
+  { key: "meeting", label: "Meeting", hint: "Call / meeting booked", icon: Users, tone: "amber", get: (l) => Boolean(l.emailSent), patch: (v) => ({ emailSent: v }) },
+  { key: "uninterested", label: "Un-interested", hint: "Not interested", icon: X, tone: "slate", get: (l) => l.proposalStatus === "Rejected", patch: (v) => (v ? { proposalStatus: "Rejected", whatsappReplied: false } : { proposalStatus: "None" }) },
+  { key: "wrong", label: "Wrong lead", hint: "Bad / wrong info", icon: AlertTriangle, tone: "red", get: (l) => l.status === "Wrong Number", patch: (v) => ({ status: v ? "Wrong Number" : "Not Contacted" }) },
+];
+
+function toggleMark(lead, key) {
+  const mark = MARKS.find((m) => m.key === key);
+  if (!mark) return lead;
+  const next = !mark.get(lead);
+  return { ...lead, ...mark.patch(next), lastAction: `${mark.label}${next ? "" : " cleared"} · ${today()}`, updatedAt: today() };
+}
+
+// Comments live as timestamped lines in the notes field, newest first.
+function parseComments(notes) {
+  return String(notes || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
+    const m = line.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*(.*)$/);
+    return m ? { date: m[1], text: m[2] } : { date: "", text: line };
+  });
+}
+
+function addComment(lead, text) {
+  const clean = String(text || "").trim();
+  if (!clean) return lead;
+  const entry = `[${today()}] ${clean.replace(/\n/g, " ")}`;
+  const notes = lead.notes ? `${entry}\n${lead.notes}` : entry;
+  return { ...lead, notes, lastAction: `Comment · ${today()}`, updatedAt: today() };
 }
 
 const CONTACTED_STATUSES = ["WhatsApp Sent", "Email Sent", "Called", "Follow Up"];
@@ -653,25 +692,14 @@ function LeadEditor({ lead, onClose, onSave }) {
   );
 }
 
-function Sidebar({ activeView, setActiveView, counts, dataMode, collapsed, onToggle }) {
-  const items = [
-    ["command", "Command", LayoutDashboard],
-    ["followups", "Follow-ups", Bell],
-    ["leads", "Leads", FileSpreadsheet],
-    ["outreach", "Outreach", MessageCircle],
-    ["proposals", "Proposals", FileText],
-    ["clients", "Clients", Briefcase],
-    ["reports", "Reports", BarChart3],
-    ["settings", "Settings", Settings],
-  ];
-
+function Sidebar({ lists, listCounts, totalCount, activeList, onSelectList, collapsed, onToggle, onSignOut, canSignOut }) {
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
       <div className="brand">
         <div className="brand-mark"><img src={pixelorCodeLogo} alt="PixelOrCode" /></div>
         <div>
           <strong>PixelOrCode</strong>
-          <span>Ops control</span>
+          <span>Lead desk</span>
         </div>
         <button className="sidebar-toggle" onClick={onToggle} title={collapsed ? "Expand sidebar" : "Collapse sidebar"} aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}>
           <PanelLeft size={18} />
@@ -679,97 +707,81 @@ function Sidebar({ activeView, setActiveView, counts, dataMode, collapsed, onTog
       </div>
 
       <nav>
-        {items.map(([key, label, Icon]) => (
-          <button key={key} className={activeView === key ? "active" : ""} onClick={() => setActiveView(key)} title={collapsed ? label : undefined}>
-            <Icon size={18} />
-            <span>{label}</span>
-            {key === "leads" && <em>{counts.leads}</em>}
-            {key === "followups" && counts.due > 0 && <em className="due">{counts.due}</em>}
+        <button className={activeList === "All lists" ? "active" : ""} onClick={() => onSelectList("All lists")} title={collapsed ? "All leads" : undefined}>
+          <LayoutDashboard size={18} />
+          <span>All leads</span>
+          <em>{totalCount}</em>
+        </button>
+        {!collapsed && <div className="nav-label">Lists</div>}
+        {lists.map((list) => (
+          <button key={list} className={activeList === list ? "active" : ""} onClick={() => onSelectList(list)} title={collapsed ? list : undefined}>
+            <FileSpreadsheet size={18} />
+            <span>{list}</span>
+            <em>{listCounts[list] || 0}</em>
           </button>
         ))}
       </nav>
 
-      <div className="sidebar-status">
-        <div>
-          <span>{dataMode === "supabase" ? "Database mode" : "Safe demo mode"}</span>
-          <strong>{counts.lists} lists loaded</strong>
+      {canSignOut && (
+        <div className="sidebar-foot">
+          <button className="sidebar-signout" onClick={onSignOut} title={collapsed ? "Sign out" : undefined}>
+            <X size={16} /> <span>Sign out</span>
+          </button>
         </div>
-        <div className="storage-bar"><span style={{ width: `${Math.min(100, counts.leads / 8)}%` }} /></div>
-        <small>{dataMode === "supabase" ? "Supabase sync active. Shared team data." : "No private leads are bundled in this build."}</small>
-      </div>
+      )}
     </aside>
   );
 }
 
-function LeadTable({ leads, selectedId, setSelectedId, onEdit, onDelete, checkedIds = new Set(), onToggleCheck, onToggleAll }) {
-  const allChecked = leads.length > 0 && leads.every((lead) => checkedIds.has(lead.id));
-  const showChecks = Boolean(onToggleCheck);
+function LeadTable({ leads, selectedId, setSelectedId, onEdit, onDelete, onToggleMark }) {
   return (
     <div className="table-shell">
-      <table>
+      <table className="simple-table">
         <thead>
           <tr>
-            {showChecks && (
-              <th className="check-col">
-                <input type="checkbox" checked={allChecked} onChange={(e) => onToggleAll?.(leads, e.target.checked)} aria-label="Select all" />
-              </th>
-            )}
             <th>Business</th>
-            <th>List / niche</th>
             <th>Location</th>
-            <th>Website</th>
             <th>Contact</th>
-            <th>Last action</th>
-            <th>Status</th>
-            <th>Owner</th>
+            <th className="marks-head">Marks</th>
             <th></th>
           </tr>
         </thead>
         <tbody>
           {leads.map((lead) => {
-            const links = getLeadLinks(lead);
+            const commentCount = parseComments(lead.notes).length;
             return (
-              <tr key={lead.id} className={`${selectedId === lead.id ? "selected" : ""} ${checkedIds.has(lead.id) ? "checked" : ""}`} onClick={() => setSelectedId(lead.id)}>
-                {showChecks && (
-                  <td className="check-col" onClick={(event) => event.stopPropagation()}>
-                    <input type="checkbox" checked={checkedIds.has(lead.id)} onChange={() => onToggleCheck(lead.id)} aria-label={`Select ${lead.name}`} />
-                  </td>
-                )}
+              <tr key={lead.id} className={selectedId === lead.id ? "selected" : ""} onClick={() => setSelectedId(lead.id)}>
                 <td>
                   <strong>{lead.name}</strong>
-                  <span>{lead.decisionMaker || lead.sourceId || "No contact person"}</span>
+                  <span>{lead.decisionMaker || lead.niche || "—"}{commentCount > 0 ? ` · ${commentCount} note${commentCount > 1 ? "s" : ""}` : ""}</span>
                 </td>
-                <td>
-                  <strong>{lead.list}</strong>
-                  <span>{lead.niche || "Uncategorized"}</span>
-                </td>
-                <td>{lead.location || "Not added"}</td>
-                <td>
-                  <div className="link-stack">
-                    <div className="link-row">
-                      <LinkButton href={links.website}>Website</LinkButton>
-                      <LinkButton href={links.companyLinkedIn}>Company LinkedIn</LinkButton>
-                      <LinkButton href={links.personLinkedIn}>Person LinkedIn</LinkButton>
-                    </div>
-                    <span className="website-pill">{lead.websiteStatus || "Unknown"}</span>
-                  </div>
-                </td>
-                <td>
-                  <span className="contact-line"><Phone size={13} /> {lead.phone || "No phone"}</span>
-                  <span className="contact-line"><Mail size={13} /> {lead.email || "No email"}</span>
+                <td>{lead.location || "—"}</td>
+                <td onClick={(event) => event.stopPropagation()}>
                   <ContactActions lead={lead} />
                 </td>
-                <td>
-                  {lead.lastAction || "Imported"}
-                  {followUpState(lead) === "overdue" && <span className="fu-tag overdue">Follow-up overdue · {lead.nextFollowUp}</span>}
-                  {followUpState(lead) === "today" && <span className="fu-tag today">Due today</span>}
+                <td className="marks-cell" onClick={(event) => event.stopPropagation()}>
+                  <div className="mark-dots">
+                    {MARKS.map((mark) => {
+                      const Icon = mark.icon;
+                      const on = mark.get(lead);
+                      return (
+                        <button
+                          key={mark.key}
+                          className={`mark-dot ${mark.tone} ${on ? "on" : ""}`}
+                          onClick={() => onToggleMark(lead, mark.key)}
+                          data-tip={`${mark.label} — ${on ? "yes" : "tap to mark"}`}
+                          aria-label={`${mark.label} for ${lead.name}`}
+                        >
+                          {on ? <Icon size={15} /> : <span className="mark-empty" />}
+                        </button>
+                      );
+                    })}
+                  </div>
                 </td>
-                <td><StatusBadge status={lead.status} /></td>
-                <td>{lead.owner || "Unassigned"}</td>
-                <td>
+                <td onClick={(event) => event.stopPropagation()}>
                   <div className="row-actions">
-                    <button className="icon-button" onClick={(event) => { event.stopPropagation(); onEdit(lead); }} aria-label={`Edit ${lead.name}`}><Edit3 size={15} /></button>
-                    <button className="icon-button danger" onClick={(event) => { event.stopPropagation(); onDelete(lead.id); }} aria-label={`Delete ${lead.name}`}><Trash2 size={15} /></button>
+                    <button className="icon-button" onClick={() => onEdit(lead)} aria-label={`Edit ${lead.name}`}><Edit3 size={15} /></button>
+                    <button className="icon-button danger" onClick={() => onDelete(lead.id)} aria-label={`Delete ${lead.name}`}><Trash2 size={15} /></button>
                   </div>
                 </td>
               </tr>
@@ -777,38 +789,23 @@ function LeadTable({ leads, selectedId, setSelectedId, onEdit, onDelete, checked
           })}
         </tbody>
       </table>
-      {leads.length === 0 && <div className="empty">No leads match this view.</div>}
+      {leads.length === 0 && <div className="empty">No leads in this list yet.</div>}
     </div>
   );
 }
 
-function LeadDetail({ lead, onUpdate, onEdit }) {
-  const [tab, setTab] = useState("overview");
-  if (!lead) return <aside className="detail-panel empty-panel">Select a lead to inspect details.</aside>;
+function LeadDetail({ lead, onToggleMark, onComment, onEdit }) {
+  const [comment, setComment] = useState("");
+  useEffect(() => { setComment(""); }, [lead?.id]);
+  if (!lead) return <aside className="detail-panel empty-panel">Pick a lead to mark it.</aside>;
   const links = getLeadLinks(lead);
+  const comments = parseComments(lead.notes);
 
-  const quickAction = (status, lastAction, proposalStatus = lead.proposalStatus) => {
-    // process rule: every send/call books its own +3d follow-up; a reply gets
-    // chased next day; closed/lost leaves the queue.
-    const isTouch = /whatsapp|email|called|proposal/i.test(lastAction);
-    const nextFollowUp = ["Closed", "Lost"].includes(status)
-      ? ""
-      : status === "Replied"
-        ? addDaysIso(1)
-        : isTouch
-          ? addDaysIso(3)
-          : lead.nextFollowUp;
-    onUpdate({
-      ...lead,
-      status,
-      lastAction: `${lastAction} · ${today()}`,
-      proposalStatus,
-      nextFollowUp,
-      whatsappSent: lead.whatsappSent || /whatsapp/i.test(lastAction),
-      whatsappReplied: lead.whatsappReplied || status === "Replied",
-      emailSent: lead.emailSent || /email/i.test(lastAction),
-      updatedAt: today(),
-    });
+  const submitComment = (event) => {
+    event.preventDefault();
+    if (!comment.trim()) return;
+    onComment(lead, comment);
+    setComment("");
   };
 
   return (
@@ -817,98 +814,57 @@ function LeadDetail({ lead, onUpdate, onEdit }) {
         <div>
           <span>{lead.list}</span>
           <h2>{lead.name}</h2>
-          <p>{lead.niche} · {lead.location || "Location pending"}</p>
+          <p>{lead.niche || "—"}{lead.location ? ` · ${lead.location}` : ""}</p>
           <ContactActions lead={lead} size={15} />
         </div>
         <button className="icon-button" onClick={() => onEdit(lead)} aria-label="Edit selected lead"><Edit3 size={17} /></button>
       </div>
 
-      <div className="tabs">
-        {["overview", "outreach", "proposal", "notes"].map((item) => (
-          <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}</button>
-        ))}
-      </div>
+      <div className="detail-content">
+        <div className="mark-grid">
+          {MARKS.map((mark) => {
+            const on = mark.get(lead);
+            const Icon = mark.icon;
+            return (
+              <button key={mark.key} className={`mark-button ${mark.tone} ${on ? "on" : ""}`} onClick={() => onToggleMark(lead, mark.key)}>
+                <Icon size={18} />
+                <strong>{mark.label}</strong>
+                <small>{on ? "Yes ✓" : mark.hint}</small>
+              </button>
+            );
+          })}
+        </div>
 
-      {tab === "overview" && (
-        <div className="detail-content">
-          <div className="status-row">
-            <StatusBadge status={lead.status} />
-            <span>{lead.proposalStatus || "No proposal"}</span>
-          </div>
-          {(() => {
-            const lt = localTimeFor(lead);
-            return lt ? (
-              <div className={`tz-badge ${lt.business ? "ok" : "off"}`}>
-                <Globe size={14} /> Their local time: <strong>{lt.text}</strong> · {lt.business ? "business hours ✓" : "outside hours"}
-              </div>
-            ) : null;
-          })()}
-          <Field label="Phone" value={lead.phone} />
+        <form className="comment-box" onSubmit={submitComment}>
+          <span className="block-label">Comments</span>
+          <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Add a comment about this lead…" rows={2} />
+          <button className="button primary" type="submit" disabled={!comment.trim()}><Plus size={15} /> Add comment</button>
+        </form>
+
+        {comments.length > 0 && (
+          <ul className="comment-list">
+            {comments.map((entry, index) => (
+              <li key={index}>
+                {entry.date && <span className="comment-date">{entry.date}</span>}
+                <p>{entry.text}</p>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <div className="detail-info">
+          <Field label="Phone" value={lead.phone} href={lead.phone ? `tel:${String(lead.phone).replace(/[^+\d]/g, "")}` : ""} />
           <Field label="Email" value={lead.email} href={lead.email?.includes("@") ? `mailto:${lead.email}` : ""} />
-          <Field label="Website status" value={lead.websiteStatus} />
-          <Field label="Decision maker" value={lead.decisionMaker} />
           <Field label="Website" value={links.website ? "Open website" : "Not added"} href={links.website} />
-          <Field label="Company LinkedIn" value={links.companyLinkedIn ? "Open company LinkedIn" : "Not added"} href={links.companyLinkedIn} />
-          <Field label="Person LinkedIn" value={links.personLinkedIn ? "Open person LinkedIn" : "Not added"} href={links.personLinkedIn} />
-          <div className="text-block">
-            <span>Why this is a good lead</span>
-            <p>{lead.leadReason || "No lead reasoning added yet."}</p>
-          </div>
-        </div>
-      )}
-
-      {tab === "outreach" && (
-        <div className="detail-content">
-          <div className="quick-grid">
-            <button onClick={() => quickAction("WhatsApp Sent", "WhatsApp sent")}><MessageCircle size={16} /> Mark WhatsApp</button>
-            <button onClick={() => quickAction("Email Sent", "Email sent")}><Mail size={16} /> Mark email</button>
-            <button onClick={() => quickAction("Called", "Called")}><Phone size={16} /> Mark call</button>
-            <button onClick={() => quickAction("Replied", "Replied")}><Bell size={16} /> Mark reply</button>
-          </div>
-          <div className="text-block">
-            <span>Ready-to-send opener</span>
-            <p>{buildOpener(lead)}</p>
-            <div className="copy-row">
-              <CopyButton text={buildOpener(lead)} label="Copy message" />
-              {lead.pitch && <CopyButton text={lead.pitch} label="Copy pitch only" />}
-              {lead.email?.includes("@") && <CopyButton text={lead.email} label="Copy email" />}
+          <Field label="Decision maker" value={lead.decisionMaker} />
+          {lead.leadReason && (
+            <div className="text-block">
+              <span>Why this is a good lead</span>
+              <p>{lead.leadReason}</p>
             </div>
-          </div>
-          <Field label="Next follow-up" value={lead.nextFollowUp} />
-          <Field label="Opening hours" value={lead.openingHours} />
+          )}
         </div>
-      )}
-
-      {tab === "proposal" && (
-        <div className="detail-content">
-          <label className="select-field">
-            Proposal status
-            <select value={lead.proposalStatus || "None"} onChange={(e) => onUpdate({ ...lead, proposalStatus: e.target.value, updatedAt: today() })}>
-              {PROPOSAL_OPTIONS.map((option) => <option key={option}>{option}</option>)}
-            </select>
-          </label>
-          <div className="quick-grid">
-            <button onClick={() => quickAction("Proposal Sent", "Proposal sent", "Sent")}><FileText size={16} /> Proposal sent</button>
-            <button onClick={() => quickAction("Meeting", "Meeting scheduled")}><Users size={16} /> Meeting</button>
-            <button onClick={() => quickAction("Closed", "Payment received", "Closed")}><CheckCircle2 size={16} /> Payment received</button>
-            <button onClick={() => quickAction("Lost", "Deal lost", "Rejected")}><X size={16} /> Lost</button>
-          </div>
-          <Field label="Estimated value" value={lead.clientValue ? `₹${lead.clientValue}` : ""} />
-          <Field label="Last action" value={lead.lastAction} />
-        </div>
-      )}
-
-      {tab === "notes" && (
-        <div className="detail-content">
-          <div className="text-block tall">
-            <span>Internal notes</span>
-            <p>{lead.notes || "No notes added."}</p>
-          </div>
-          <Field label="Address" value={lead.address} />
-          <Field label="Raw source link" value={lead.sourceLink ? lead.sourceLink : ""} href={lead.sourceLink} />
-          <Field label="Raw other link" value={lead.otherLink ? lead.otherLink : ""} href={lead.otherLink} />
-        </div>
-      )}
+      </div>
     </aside>
   );
 }
@@ -1104,6 +1060,7 @@ export default function App() {
   const [listFilter, setListFilter] = useState("All lists");
   const [statusFilter, setStatusFilter] = useState("All statuses");
   const [metricFilter, setMetricFilter] = useState(() => new URLSearchParams(window.location.search).get("metric") || "total");
+  const [markFilter, setMarkFilter] = useState("all");
   const [selectedId, setSelectedId] = useState("");
   const [editingLead, setEditingLead] = useState(null);
   const [isCreating, setIsCreating] = useState(false);
@@ -1116,7 +1073,7 @@ export default function App() {
   useEffect(() => {
     setPage(0);
     setCheckedIds(new Set());
-  }, [query, listFilter, statusFilter, metricFilter, activeView, sortKey]);
+  }, [query, listFilter, markFilter, sortKey]);
 
   useEffect(() => {
     if (!isSupabaseConfigured) return undefined;
@@ -1269,48 +1226,39 @@ export default function App() {
 
   const lists = useMemo(() => Array.from(new Set(data.leads.map((lead) => lead.list).filter(Boolean))).sort(), [data.leads]);
 
-  const filteredLeads = useMemo(() => {
+  // Leads in the active list (sidebar) + search box. This is the scope the
+  // stat cards and table both reflect, so "open a list → see its numbers" holds.
+  const listLeads = useMemo(() => {
     const term = query.trim().toLowerCase();
     return data.leads.filter((lead) => {
-      const matchesQuery = !term || [lead.name, lead.list, lead.niche, lead.location, lead.phone, lead.email, lead.websiteStatus, lead.status, lead.decisionMaker, lead.notes, lead.sourceId, lead.owner]
-        .some((value) => String(value || "").toLowerCase().includes(term));
       const matchesList = listFilter === "All lists" || lead.list === listFilter;
-      const matchesStatus = statusFilter === "All statuses" || lead.status === statusFilter;
-      return matchesQuery && matchesList && matchesStatus;
+      if (!matchesList) return false;
+      if (!term) return true;
+      return [lead.name, lead.niche, lead.location, lead.phone, lead.email, lead.decisionMaker, lead.notes]
+        .some((value) => String(value || "").toLowerCase().includes(term));
     });
-  }, [data.leads, query, listFilter, statusFilter]);
+  }, [data.leads, query, listFilter]);
 
-  const selectedLead = filteredLeads.find((lead) => lead.id === selectedId) || filteredLeads[0] || data.leads[0];
+  const listCounts = useMemo(() => {
+    const counts = {};
+    for (const lead of data.leads) counts[lead.list] = (counts[lead.list] || 0) + 1;
+    return counts;
+  }, [data.leads]);
 
-  const matchesMetric = (lead, metric) => {
-    if (metric === "total") return true;
-    if (metric === "due") return ["overdue", "today"].includes(followUpState(lead));
-    if (metric === "stale") return isStale(lead);
-    if (metric === "emails") return Boolean(lead.emailSent);
-    if (metric === "whatsapp") return Boolean(lead.whatsappSent) || /whatsapp/i.test(lead.status);
-    if (metric === "responses") return Boolean(lead.whatsappReplied) || ["Replied", "Interested", "Follow Up", "Meeting"].includes(lead.status);
-    if (metric === "proposals") return Boolean(lead.proposalStatus && lead.proposalStatus !== "None");
-    if (metric === "closed") return lead.status === "Closed" || lead.proposalStatus === "Closed";
-    return true;
-  };
+  // Stat cards double as filters. Apply the active mark filter on top of listLeads.
+  const visibleLeads = useMemo(() => {
+    if (markFilter === "all") return listLeads;
+    const mark = MARKS.find((m) => m.key === markFilter);
+    return mark ? listLeads.filter((lead) => mark.get(lead)) : listLeads;
+  }, [listLeads, markFilter]);
+
+  const selectedLead = visibleLeads.find((lead) => lead.id === selectedId) || visibleLeads[0] || listLeads[0];
 
   const stats = useMemo(() => {
-    const leads = data.leads;
-    const count = (predicate) => leads.filter(predicate).length;
-    const proposalClients = new Set(data.proposals.map((proposal) => proposal.client));
-    return {
-      total: leads.length,
-      due: count((lead) => ["overdue", "today"].includes(followUpState(lead))),
-      stale: count(isStale),
-      emailsSent: count((lead) => lead.emailSent),
-      whatsapp: count((lead) => lead.whatsappSent || /whatsapp/i.test(lead.status)),
-      responses: count((lead) => lead.whatsappReplied || ["Replied", "Interested", "Follow Up", "Meeting"].includes(lead.status)),
-      proposals: data.proposals.length + count((lead) => lead.proposalStatus && lead.proposalStatus !== "None" && !proposalClients.has(lead.name)),
-      closed: count((lead) => lead.status === "Closed" || lead.proposalStatus === "Closed"),
-      lists: lists.length,
-      leads: leads.length,
-    };
-  }, [data.leads, data.proposals.length, lists.length]);
+    const counts = { total: listLeads.length };
+    for (const mark of MARKS) counts[mark.key] = listLeads.filter(mark.get).length;
+    return counts;
+  }, [listLeads]);
 
   const updateLead = async (updatedLead) => {
     const nextLeads = data.leads.map((lead) => lead.id === updatedLead.id ? updatedLead : lead);
@@ -1321,6 +1269,19 @@ export default function App() {
     } catch (error) {
       setSyncMessage(`Lead sync failed: ${error.message}`);
     }
+  };
+
+  const toggleLeadMark = (lead, key) => {
+    setSelectedId(lead.id);
+    updateLead(toggleMark(lead, key));
+  };
+
+  const commentLead = (lead, text) => updateLead(addComment(lead, text));
+
+  const selectList = (list) => {
+    setListFilter(list);
+    setMarkFilter("all");
+    setSelectedId("");
   };
 
   const saveLead = async (lead) => {
@@ -1390,6 +1351,14 @@ export default function App() {
   };
 
   const exportCsv = (rows) => {
+    // Exporting leaks the full lead sheet, so it's gated behind a password.
+    const entered = window.prompt("Enter the export password to download leads:");
+    if (entered === null) return;
+    if (entered !== EXPORT_PASSWORD) {
+      setSyncMessage("Export blocked — wrong password.");
+      window.alert("Wrong password. Export cancelled.");
+      return;
+    }
     const dataset = Array.isArray(rows) && rows.length ? rows : data.leads;
     const headers = ["name", "list", "niche", "location", "phone", "alternatePhone", "email", "websiteStatus", "status", "owner", "decisionMaker", "proposalStatus", "nextFollowUp", "leadReason", "pitch", "notes"];
     const csv = [headers.join(","), ...dataset.map((lead) => headers.map((header) => csvEscape(lead[header])).join(","))].join("\n");
@@ -1426,75 +1395,30 @@ export default function App() {
     await refreshData();
   };
 
-  const selectMetric = (metric) => {
-    setMetricFilter(metric);
-    setActiveView("command");
-    window.history.replaceState(null, "", `${window.location.pathname}?metric=${metric}#command`);
-  };
-
-  const showLeads = ["command", "leads", "outreach", "clients", "followups"].includes(activeView);
-  const viewLeads = activeView === "outreach"
-    ? filteredLeads.filter((lead) => ["WhatsApp Ready", "WhatsApp Sent", "Email Sent", "Called", "Replied", "Interested", "Follow Up"].includes(lead.status))
-    : activeView === "clients"
-      ? filteredLeads.filter((lead) => lead.status === "Closed" || lead.proposalStatus === "Closed")
-      : activeView === "followups"
-        ? filteredLeads.filter((lead) => ["overdue", "today"].includes(followUpState(lead)))
-        : filteredLeads;
-  const visibleLeads = showLeads ? viewLeads.filter((lead) => matchesMetric(lead, metricFilter)) : viewLeads;
   const sortedLeads = useMemo(() => {
     const copy = [...visibleLeads];
-    if (activeView === "followups" || sortKey === "followup") {
-      copy.sort((a, b) => (a.nextFollowUp || "9999").localeCompare(b.nextFollowUp || "9999"));
-    } else if (sortKey === "name") {
+    if (sortKey === "name") {
       copy.sort((a, b) => a.name.localeCompare(b.name));
     } else {
       copy.sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")));
     }
     return copy;
-  }, [visibleLeads, sortKey, activeView]);
+  }, [visibleLeads, sortKey]);
   const pageCount = Math.max(1, Math.ceil(sortedLeads.length / PAGE_SIZE));
   const safePage = Math.min(page, pageCount - 1);
   const pagedLeads = sortedLeads.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE);
-  const metricLabels = {
-    total: "All leads",
-    due: "Due follow-ups",
-    stale: "Stale (7d+, no follow-up)",
-    emails: "Emails sent",
-    whatsapp: "WhatsApp sent",
-    responses: "Responses",
-    proposals: "Proposals",
-    closed: "Closed",
-  };
 
-  // Mark the currently-selected lead via keyboard (mirrors detail-panel quick actions).
-  const markSelected = (status, action) => {
-    const lead = selectedLead;
-    if (!lead) return;
-    updateLead({
-      ...lead,
-      status,
-      lastAction: `${action} · ${today()}`,
-      nextFollowUp: status === "Replied" ? addDaysIso(1) : ["Closed", "Lost"].includes(status) ? "" : addDaysIso(3),
-      whatsappSent: lead.whatsappSent || /whatsapp/i.test(action),
-      whatsappReplied: lead.whatsappReplied || status === "Replied",
-      emailSent: lead.emailSent || /email/i.test(action),
-      updatedAt: today(),
-    });
-  };
-
+  // Keyboard: j/k to move between leads, 1–4 to toggle the four marks on the selected lead.
   useEffect(() => {
     const onKey = (event) => {
       const tag = (event.target.tagName || "").toLowerCase();
       if (["input", "textarea", "select"].includes(tag) || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (!showLeads || !pagedLeads.length) return;
+      if (!pagedLeads.length) return;
       const idx = pagedLeads.findIndex((l) => l.id === selectedLead?.id);
       const key = event.key.toLowerCase();
       if (key === "j" || key === "arrowdown") { event.preventDefault(); setSelectedId(pagedLeads[Math.min(pagedLeads.length - 1, idx + 1)]?.id); }
       else if (key === "k" || key === "arrowup") { event.preventDefault(); setSelectedId(pagedLeads[Math.max(0, idx - 1)]?.id); }
-      else if (key === "w") markSelected("WhatsApp Sent", "WhatsApp sent");
-      else if (key === "e") markSelected("Email Sent", "Email sent");
-      else if (key === "c") markSelected("Called", "Called");
-      else if (key === "r") markSelected("Replied", "Replied");
+      else if (["1", "2", "3", "4"].includes(key) && selectedLead) toggleLeadMark(selectedLead, MARKS[Number(key) - 1].key);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -1508,89 +1432,92 @@ export default function App() {
     return <AuthGate onDemoMode={() => setForceDemo(true)} />;
   }
 
+  const listTitle = listFilter === "All lists" ? "All leads" : listFilter;
+  const markCards = [
+    { key: "all", label: "Total", value: stats.total, tone: "", icon: FileSpreadsheet },
+    ...MARKS.map((mark) => ({ key: mark.key, label: mark.label, value: stats[mark.key], tone: mark.tone, icon: mark.icon })),
+  ];
+
   return (
     <div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      <Sidebar activeView={activeView} setActiveView={navigate} counts={stats} dataMode={dataMode} collapsed={sidebarCollapsed} onToggle={toggleSidebar} />
+      <Sidebar
+        lists={lists}
+        listCounts={listCounts}
+        totalCount={data.leads.length}
+        activeList={listFilter}
+        onSelectList={selectList}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        onSignOut={handleSignOut}
+        canSignOut={isSupabaseConfigured && Boolean(session)}
+      />
 
       <main>
         <header className="topbar">
           <div>
-            <p>PixelOrCode command center</p>
-            <h1>{activeView === "command" ? "Agency growth operations" : activeView.charAt(0).toUpperCase() + activeView.slice(1)}</h1>
+            <p>PixelOrCode lead desk</p>
+            <h1>{listTitle}</h1>
             <span className={`sync-pill ${dataMode === "supabase" ? "connected" : "demo"}`}>
-              {isLoading ? "Loading workspace..." : syncMessage}
+              {isLoading ? "Loading…" : syncMessage}
             </span>
           </div>
           <div className="top-actions">
             <div className="search-box">
               <Search size={17} />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search leads, list, city, phone, email..." />
+              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this list by name, city, phone…" />
             </div>
             <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => importXlsx(e.target.files?.[0])} hidden />
-            <button className="button ghost" onClick={() => fileRef.current?.click()}><Import size={16} /> Import XLSX</button>
-            <button className="button ghost" onClick={() => exportCsv(showLeads ? sortedLeads : data.leads)} title="Exports the current filtered view"><Download size={16} /> Export</button>
-            {isSupabaseConfigured && session && <button className="button ghost" onClick={handleSignOut}>Sign out</button>}
+            <button className="button ghost" onClick={() => fileRef.current?.click()}><Import size={16} /> Import</button>
+            <button className="button ghost" onClick={() => exportCsv(sortedLeads)} title="Exports the current view"><Download size={16} /> Export</button>
             <button className="button primary" onClick={() => setIsCreating(true)}><Plus size={16} /> Add lead</button>
           </div>
         </header>
 
-        <section className="stats-grid">
-          <StatCard label="Total leads" value={stats.total.toLocaleString("en-IN")} sublabel={`${stats.lists} active lists`} icon={FileSpreadsheet} active={metricFilter === "total"} onClick={() => selectMetric("total")} />
-          <StatCard label="Due follow-ups" value={stats.due.toLocaleString("en-IN")} sublabel="Overdue + due today" icon={Bell} tone="amber" active={metricFilter === "due"} onClick={() => selectMetric("due")} />
-          <StatCard label="Going stale" value={stats.stale.toLocaleString("en-IN")} sublabel="Contacted 7d+, no follow-up" icon={AlertTriangle} tone="amber" active={metricFilter === "stale"} onClick={() => selectMetric("stale")} />
-          <StatCard label="Emails sent" value={stats.emailsSent.toLocaleString("en-IN")} sublabel="Across all lists" icon={Mail} tone="orange" active={metricFilter === "emails"} onClick={() => selectMetric("emails")} />
-          <StatCard label="WhatsApp sent" value={stats.whatsapp.toLocaleString("en-IN")} sublabel="Across all lists" icon={MessageCircle} tone="green" active={metricFilter === "whatsapp"} onClick={() => selectMetric("whatsapp")} />
-          <StatCard label="Responses" value={stats.responses.toLocaleString("en-IN")} sublabel="Replied · interested · meetings" icon={Bell} tone="amber" active={metricFilter === "responses"} onClick={() => selectMetric("responses")} />
-          <StatCard label="Proposals" value={stats.proposals.toLocaleString("en-IN")} sublabel="Sent or active" icon={FileText} tone="purple" active={metricFilter === "proposals"} onClick={() => selectMetric("proposals")} />
-          <StatCard label="Closed" value={stats.closed.toLocaleString("en-IN")} sublabel="Payment received only" icon={CircleDollarSign} tone="green" active={metricFilter === "closed"} onClick={() => selectMetric("closed")} />
+        <section className="stats-grid simple-stats">
+          {markCards.map((card) => (
+            <StatCard
+              key={card.key}
+              label={card.label}
+              value={(card.value || 0).toLocaleString("en-IN")}
+              sublabel={card.key === "all" ? (listFilter === "All lists" ? "Across all lists" : "In this list") : "Click to filter"}
+              icon={card.icon}
+              tone={card.tone}
+              active={markFilter === card.key}
+              onClick={() => setMarkFilter(card.key)}
+            />
+          ))}
         </section>
 
         <section className="workspace">
           <div className="workspace-main">
-            {isLoading && <div className="empty">Loading workspace data...</div>}
-            {showLeads && (
+            {isLoading ? (
+              <div className="empty">Loading leads…</div>
+            ) : (
               <>
                 <div className="toolbar">
                   <div>
-                    <h2>{activeView === "followups" ? "Follow-up queue" : activeView === "outreach" ? "Outreach queue" : activeView === "clients" ? "Closed clients" : "Lead database"}</h2>
-                    <span>{sortedLeads.length.toLocaleString("en-IN")} records · {metricLabels[metricFilter]}{activeView === "followups" ? " · oldest due first — clear these before new sends" : ""}</span>
+                    <h2>{listTitle}</h2>
+                    <span>{sortedLeads.length.toLocaleString("en-IN")} {sortedLeads.length === 1 ? "lead" : "leads"}{markFilter !== "all" ? ` · ${markCards.find((c) => c.key === markFilter).label.toLowerCase()}` : ""}</span>
                   </div>
                   <div className="filters">
-                    <label><Filter size={15} /> <select value={listFilter} onChange={(e) => setListFilter(e.target.value)}><option>All lists</option>{lists.map((list) => <option key={list}>{list}</option>)}</select></label>
-                    <label><ChevronDown size={15} /> <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}><option>All statuses</option>{STATUS_OPTIONS.map((status) => <option key={status}>{status}</option>)}</select></label>
-                    <label><ChevronDown size={15} /> <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}><option value="updated">Recently updated</option><option value="followup">Follow-up date</option><option value="name">Name A–Z</option></select></label>
+                    <label><ChevronDown size={15} /> <select value={sortKey} onChange={(e) => setSortKey(e.target.value)}><option value="updated">Recently updated</option><option value="name">Name A–Z</option></select></label>
                   </div>
                 </div>
 
-                {activeView === "command" && (
-                  <AgendaWidget stats={stats} onJump={(view) => navigate(view)} onMetric={selectMetric} />
-                )}
+                <div className="mark-legend">
+                  <span className="legend-label">Marks:</span>
+                  {MARKS.map((mark) => {
+                    const Icon = mark.icon;
+                    return (
+                      <span key={mark.key} className="legend-item">
+                        <span className={`mark-dot ${mark.tone} on legend-dot`}><Icon size={13} /></span>
+                        {mark.label}
+                      </span>
+                    );
+                  })}
+                </div>
 
-                {lastBulk && (
-                  <div className="undo-bar">
-                    <span>Last bulk action: {lastBulk.snapshot.length} leads · {lastBulk.message}</span>
-                    <button onClick={undoBulk}><RotateCcw size={15} /> Undo</button>
-                    <button className="undo-dismiss" onClick={() => setLastBulk(null)}><X size={14} /></button>
-                  </div>
-                )}
-
-                {checkedIds.size > 0 && (
-                  <div className="bulk-bar">
-                    <strong>{checkedIds.size} selected</strong>
-                    <button onClick={() => bulkApply((l) => ({ status: "WhatsApp Sent", whatsappSent: true, lastAction: `WhatsApp sent · ${today()}`, nextFollowUp: addDaysIso(3) }), "marked WhatsApp Sent (+3d follow-up)")}><MessageCircle size={15} /> WhatsApp Sent</button>
-                    <button onClick={() => bulkApply((l) => ({ status: "Email Sent", emailSent: true, lastAction: `Email sent · ${today()}`, nextFollowUp: addDaysIso(3) }), "marked Email Sent (+3d follow-up)")}><Mail size={15} /> Email Sent</button>
-                    <button onClick={() => bulkApply(() => ({ nextFollowUp: addDaysIso(3) }), "follow-up set +3 days")}><Bell size={15} /> Follow-up +3d</button>
-                    <label className="bulk-owner"><Users size={15} />
-                      <select defaultValue="" onChange={(e) => { if (e.target.value) { bulkApply(() => ({ owner: e.target.value }), `assigned to ${e.target.value}`); e.target.value = ""; } }}>
-                        <option value="" disabled>Assign owner…</option>
-                        {OWNERS.map((owner) => <option key={owner}>{owner}</option>)}
-                      </select>
-                    </label>
-                    <button className="bulk-clear" onClick={() => setCheckedIds(new Set())}><X size={15} /> Clear</button>
-                  </div>
-                )}
-
-                <LeadTable leads={pagedLeads} selectedId={selectedLead?.id} setSelectedId={setSelectedId} onEdit={setEditingLead} onDelete={deleteLead} checkedIds={checkedIds} onToggleCheck={toggleCheck} onToggleAll={toggleAll} />
+                <LeadTable leads={pagedLeads} selectedId={selectedLead?.id} setSelectedId={setSelectedId} onEdit={setEditingLead} onDelete={deleteLead} onToggleMark={toggleLeadMark} />
 
                 {sortedLeads.length > PAGE_SIZE && (
                   <div className="pager">
@@ -1603,26 +1530,9 @@ export default function App() {
                 )}
               </>
             )}
-
-            {activeView === "proposals" && <ProposalsView proposals={data.proposals} leads={data.leads} onAddProposal={addProposal} />}
-            {activeView === "reports" && (
-              <ReportsView leads={data.leads} lists={lists} />
-            )}
-            {activeView === "settings" && (
-              <section className="panel settings-panel">
-                <div className="panel-title"><div><p>System</p><h2>Database workspace settings</h2></div><Settings size={20} /></div>
-                <p>{dataMode === "supabase" ? "Supabase is connected. Lead, proposal, import, and PDF changes sync through the shared database/storage layer." : "This public-safe build is in demo mode because Supabase environment keys are not configured. No private lead sheet or proposal PDF is bundled into the frontend."}</p>
-                <div className="settings-grid">
-                  <Field label="Data source" value={dataMode === "supabase" ? "Supabase Postgres" : "Safe demo data"} />
-                  <Field label="PDF storage" value={dataMode === "supabase" ? "Private Supabase Storage bucket" : "Disabled in demo mode"} />
-                  <Field label="Shared team edits" value={dataMode === "supabase" ? "Active" : "Waiting for database env keys"} />
-                </div>
-                <button className="button ghost" onClick={resetData}>Reload workspace data</button>
-              </section>
-            )}
           </div>
 
-          {showLeads && <LeadDetail lead={selectedLead} onUpdate={updateLead} onEdit={setEditingLead} />}
+          <LeadDetail lead={selectedLead} onToggleMark={toggleLeadMark} onComment={commentLead} onEdit={setEditingLead} />
         </section>
       </main>
 
