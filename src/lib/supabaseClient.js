@@ -29,13 +29,11 @@ export function onAuthChange(callback) {
   return () => data.subscription.unsubscribe();
 }
 
-export async function sendMagicLink(email) {
+export async function signInWithPassword(email, password) {
   if (!supabase) throw new Error("Supabase is not configured.");
-  const { error } = await supabase.auth.signInWithOtp({
+  const { error } = await supabase.auth.signInWithPassword({
     email,
-    options: {
-      emailRedirectTo: authRedirectUrl,
-    },
+    password,
   });
   if (error) throw error;
 }

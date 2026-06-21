@@ -39,7 +39,7 @@ import {
   saveProposalRecord,
   uploadProposalPdf,
 } from "./lib/dataStore";
-import { getCurrentSession, onAuthChange, sendMagicLink, signOut } from "./lib/supabaseClient";
+import { getCurrentSession, onAuthChange, signInWithPassword, signOut } from "./lib/supabaseClient";
 
 const EMPTY_DATA = {
   __version: "loading",
@@ -445,16 +445,17 @@ function LinkButton({ href, children }) {
 
 function AuthGate({ onDemoMode }) {
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
 
   const submit = async (event) => {
     event.preventDefault();
-    if (!email.trim()) return;
+    if (!email.trim() || !password) return;
     try {
       setIsSending(true);
-      await sendMagicLink(email.trim());
-      setMessage("Magic login link sent. Open it from your email to access the shared CRM.");
+      setMessage("");
+      await signInWithPassword(email.trim(), password);
     } catch (error) {
       setMessage(`Login failed: ${error.message}`);
     } finally {
@@ -473,12 +474,16 @@ function AuthGate({ onDemoMode }) {
           </div>
         </div>
         <h1>Sign in to the shared CRM</h1>
-        <p>Use your team email to receive a magic link. Leads, proposals, and PDFs stay behind Supabase authentication.</p>
+        <p>Enter your team email and password. Access is restricted to approved accounts — there is no public sign-up.</p>
         <label>
           Email
-          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="team@pixelorcode.com" required />
+          <input type="email" value={email} onChange={(event) => setEmail(event.target.value)} placeholder="team@pixelorcode.com" autoComplete="username" required />
         </label>
-        <button className="button primary" type="submit" disabled={isSending}>{isSending ? "Sending..." : "Send magic link"}</button>
+        <label>
+          Password
+          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" autoComplete="current-password" required />
+        </label>
+        <button className="button primary" type="submit" disabled={isSending}>{isSending ? "Signing in..." : "Sign in"}</button>
         <button className="button ghost" type="button" onClick={onDemoMode}>View safe demo</button>
         {message && <span className="auth-message">{message}</span>}
       </form>
