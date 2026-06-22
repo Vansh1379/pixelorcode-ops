@@ -73,6 +73,8 @@ const OWNERS = ["Unassigned", "Rishav", "Vansh", "Sales Team", "Design", "Ops"];
 const PAGE_SIZE = 100;
 const EXPORT_PASSWORD = "vansh1379";
 const SALES_REPS = ["Rishav", "Vansh", "Sales 1", "Sales 2", "Sales 3"];
+// Lists that always show in the sidebar even with 0 leads (so you can fill them later).
+const ALWAYS_SHOW_LISTS = ["Custom"];
 const VIEWS = ["command", "followups", "leads", "outreach", "proposals", "clients", "reports", "settings"];
 
 // The magic-link redirect lands with #access_token=…&refresh_token=… in the hash.
@@ -1284,7 +1286,7 @@ export default function App() {
     }
   };
 
-  const lists = useMemo(() => Array.from(new Set(data.leads.map((lead) => lead.list).filter(Boolean))).sort(), [data.leads]);
+  const lists = useMemo(() => Array.from(new Set([...data.leads.map((lead) => lead.list).filter(Boolean), ...ALWAYS_SHOW_LISTS])).sort(), [data.leads]);
 
   // Leads in the active list (sidebar) + search box. This is the scope the
   // stat cards and table both reflect, so "open a list → see its numbers" holds.
