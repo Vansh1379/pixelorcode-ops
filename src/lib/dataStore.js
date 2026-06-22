@@ -206,6 +206,26 @@ export async function deleteLeadRecord(id) {
   if (error) throw error;
 }
 
+// Live updates: push every leads row change to the callback so all open
+// browsers stay in sync. Requires Realtime enabled for the `leads` table.
+// Returns an unsubscribe function.
+export function subscribeToLeads({ onUpsert, onDelete }) {
+  if (!isSupabaseConfigured || !supabase) return () => {};
+  const channel = supabase
+    .channel("leads-stream")
+    .on("postgres_changes", { event: "*", schema: "public", table: "leads" }, (payload) => {
+      if (payload.eventType === "DELETE") {
+        onDelete?.(payload.old?.id);
+      } else {
+        onUpsert?.(fromLeadRow(payload.new));
+      }
+    })
+    .subscribe();
+  return () => {
+    supabase.removeChannel(channel);
+  };
+}
+
 export async function saveProposalRecord(proposal) {
   if (!isSupabaseConfigured) return proposal;
   const { data, error } = await requireSupabase()

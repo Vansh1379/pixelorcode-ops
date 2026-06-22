@@ -1932,6 +1932,33 @@ tbody tr.checked.selected { box-shadow: inset 3px 0 0 var(--ink); }
 }
 .sidebar.collapsed .sidebar-signout span { display: none; }
 
+/* "I am" rep picker in the topbar */
+.rep-picker {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(11, 11, 9, 0.18);
+  border-radius: 8px;
+  background: #fffdf7;
+  color: var(--text);
+  font-size: 13px;
+}
+.rep-picker select {
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  outline: none;
+}
+.rep-picker.unset {
+  border-color: #c96b32;
+  background: rgba(201, 107, 50, 0.08);
+  color: #c96b32;
+}
+
 /* Stat row — wraps to fit any number of cards */
 .stats-grid.simple-stats {
   grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
@@ -2127,4 +2154,65 @@ table.simple-table {
   border-top: 1px solid var(--line-soft);
   display: grid;
   gap: 10px;
+}
+
+/* ---- Mobile / phone layout for the lead desk ---- */
+@media (max-width: 900px) {
+  /* Single column regardless of the saved collapse preference */
+  .app,
+  .app.sidebar-collapsed {
+    grid-template-columns: 1fr;
+  }
+
+  /* Sidebar becomes a horizontal, scrollable strip of lists at the top */
+  .sidebar,
+  .sidebar.collapsed {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 12px;
+    overflow-x: auto;
+  }
+  .sidebar.collapsed .brand { flex-direction: row; }
+  .sidebar.collapsed nav button span,
+  .sidebar.collapsed .sidebar-signout span { display: inline; }
+  .sidebar .brand { flex-shrink: 0; padding: 0; }
+  .sidebar .brand > div:not(.brand-mark) { display: none; }
+  .sidebar nav {
+    display: flex;
+    flex: 1;
+    gap: 8px;
+    overflow-x: auto;
+  }
+  .sidebar nav button {
+    flex-shrink: 0;
+    width: auto;
+    height: 38px;
+  }
+  .sidebar nav button em { position: static; }
+  .nav-label { display: none; }
+  .sidebar-foot { margin: 0; padding: 0; flex-shrink: 0; }
+  .sidebar-signout { width: auto; padding: 0 12px; }
+  .sidebar-toggle { display: none; }
+
+  /* Keep stat cards in a compact grid instead of one-per-row */
+  .stats-grid.simple-stats {
+    grid-template-columns: repeat(auto-fit, minmax(108px, 1fr));
+  }
+  .stat-card {
+    min-height: 84px;
+    padding: 12px;
+  }
+  .stat-card strong { font-size: 22px; }
+
+  /* Detail panel drops below the table */
+  .detail-panel { position: static; height: auto; }
+
+  .top-actions { gap: 8px; }
+  .rep-picker { width: 100%; }
+}
+
+@media (max-width: 560px) {
+  .mark-grid { grid-template-columns: 1fr; }
+  .mark-legend { font-size: 11px; gap: 6px 12px; }
 }

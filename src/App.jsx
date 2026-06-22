@@ -38,6 +38,7 @@ import {
   saveLeadRecord,
   saveLeadRecords,
   saveProposalRecord,
+  subscribeToLeads,
   uploadProposalPdf,
 } from "./lib/dataStore";
 import { getCurrentSession, onAuthChange, signInWithPassword, signOut } from "./lib/supabaseClient";
@@ -71,6 +72,7 @@ const PROPOSAL_OPTIONS = ["None", "Drafting", "Sent", "Approved", "Rejected", "C
 const OWNERS = ["Unassigned", "Rishav", "Vansh", "Sales Team", "Design", "Ops"];
 const PAGE_SIZE = 100;
 const EXPORT_PASSWORD = "vansh1379";
+const SALES_REPS = ["Rishav", "Vansh", "Sales 1", "Sales 2", "Sales 3"];
 const VIEWS = ["command", "followups", "leads", "outreach", "proposals", "clients", "reports", "settings"];
 
 // The magic-link redirect lands with #access_token=…&refresh_token=… in the hash.
@@ -157,27 +159,34 @@ const MARKS = [
   { key: "wrong", label: "Wrong lead", hint: "Bad / wrong info", icon: AlertTriangle, tone: "red", get: (l) => l.status === "Wrong Number", patch: (v) => ({ status: v ? "Wrong Number" : "Not Contacted" }) },
 ];
 
-function toggleMark(lead, key) {
+function toggleMark(lead, key, by = "") {
   const mark = MARKS.find((m) => m.key === key);
   if (!mark) return lead;
   const next = !mark.get(lead);
-  return { ...lead, ...mark.patch(next), lastAction: `${mark.label}${next ? "" : " cleared"} · ${today()}`, updatedAt: today() };
+  return {
+    ...lead,
+    ...mark.patch(next),
+    owner: by || lead.owner,
+    lastAction: `${mark.label}${next ? "" : " cleared"}${by ? ` by ${by}` : ""} · ${today()}`,
+    updatedAt: today(),
+  };
 }
 
 // Comments live as timestamped lines in the notes field, newest first.
+// Format: "[2026-06-22 · Vansh] text" (the name is optional).
 function parseComments(notes) {
   return String(notes || "").split("\n").map((line) => line.trim()).filter(Boolean).map((line) => {
-    const m = line.match(/^\[(\d{4}-\d{2}-\d{2})\]\s*(.*)$/);
-    return m ? { date: m[1], text: m[2] } : { date: "", text: line };
+    const m = line.match(/^\[(\d{4}-\d{2}-\d{2})(?:\s*·\s*([^\]]+))?\]\s*(.*)$/);
+    return m ? { date: m[1], by: (m[2] || "").trim(), text: m[3] } : { date: "", by: "", text: line };
   });
 }
 
-function addComment(lead, text) {
+function addComment(lead, text, by = "") {
   const clean = String(text || "").trim();
   if (!clean) return lead;
-  const entry = `[${today()}] ${clean.replace(/\n/g, " ")}`;
+  const entry = `[${today()}${by ? ` · ${by}` : ""}] ${clean.replace(/\n/g, " ")}`;
   const notes = lead.notes ? `${entry}\n${lead.notes}` : entry;
-  return { ...lead, notes, lastAction: `Comment · ${today()}`, updatedAt: today() };
+  return { ...lead, notes, owner: by || lead.owner, lastAction: `Comment${by ? ` by ${by}` : ""} · ${today()}`, updatedAt: today() };
 }
 
 const CONTACTED_STATUSES = ["WhatsApp Sent", "Email Sent", "Called", "Follow Up"];
@@ -845,7 +854,9 @@ function LeadDetail({ lead, onToggleMark, onComment, onEdit }) {
           <ul className="comment-list">
             {comments.map((entry, index) => (
               <li key={index}>
-                {entry.date && <span className="comment-date">{entry.date}</span>}
+                {(entry.date || entry.by) && (
+                  <span className="comment-date">{entry.by ? `${entry.by} · ` : ""}{entry.date}</span>
+                )}
                 <p>{entry.text}</p>
               </li>
             ))}
@@ -853,6 +864,7 @@ function LeadDetail({ lead, onToggleMark, onComment, onEdit }) {
         )}
 
         <div className="detail-info">
+          {lead.lastAction && <Field label="Last update" value={lead.lastAction} />}
           <Field label="Phone" value={lead.phone} href={lead.phone ? `tel:${String(lead.phone).replace(/[^+\d]/g, "")}` : ""} />
           <Field label="Email" value={lead.email} href={lead.email?.includes("@") ? `mailto:${lead.email}` : ""} />
           <Field label="Website" value={links.website ? "Open website" : "Not added"} href={links.website} />
@@ -1056,6 +1068,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [activeView, setActiveView] = useState(initialView);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("sidebarCollapsed") === "1");
+  const [repName, setRepName] = useState(() => localStorage.getItem("repName") || "");
   const [query, setQuery] = useState("");
   const [listFilter, setListFilter] = useState("All lists");
   const [statusFilter, setStatusFilter] = useState("All statuses");
@@ -1137,6 +1150,47 @@ export default function App() {
     };
   }, [session, forceDemo]);
 
+  // Live team sync — instant once Realtime is enabled for the leads table.
+  useEffect(() => {
+    if (dataMode !== "supabase") return undefined;
+    const unsubscribe = subscribeToLeads({
+      onUpsert: (lead) => setData((current) => {
+        const exists = current.leads.some((item) => item.id === lead.id);
+        const leads = exists
+          ? current.leads.map((item) => (item.id === lead.id ? lead : item))
+          : [lead, ...current.leads];
+        return { ...current, leads };
+      }),
+      onDelete: (id) => setData((current) => ({ ...current, leads: current.leads.filter((item) => item.id !== id) })),
+    });
+    return unsubscribe;
+  }, [dataMode]);
+
+  // Fallback poll so the shared view stays fresh even without Realtime enabled.
+  // Re-fetches every 20s and only swaps in the leads that actually changed,
+  // so it never disturbs the row you're looking at or a comment you're typing.
+  useEffect(() => {
+    if (dataMode !== "supabase") return undefined;
+    const interval = setInterval(async () => {
+      if (document.hidden) return;
+      try {
+        const loaded = await loadWorkspaceData({ forceDemo: false });
+        setData((current) => {
+          const byId = new Map(current.leads.map((l) => [l.id, l]));
+          let changed = current.leads.length !== loaded.leads.length;
+          for (const lead of loaded.leads) {
+            const prev = byId.get(lead.id);
+            if (!prev || prev.updatedAt !== lead.updatedAt || prev.status !== lead.status) changed = true;
+          }
+          return changed ? { ...current, leads: loaded.leads, proposals: loaded.proposals } : current;
+        });
+      } catch {
+        /* transient network error — next tick retries */
+      }
+    }, 20000);
+    return () => clearInterval(interval);
+  }, [dataMode]);
+
   const refreshData = async () => {
     const loaded = await loadWorkspaceData({ forceDemo });
     setData(loaded);
@@ -1163,6 +1217,12 @@ export default function App() {
       localStorage.setItem("sidebarCollapsed", next ? "1" : "0");
       return next;
     });
+  };
+
+  const setRep = (name) => {
+    setRepName(name);
+    if (name) localStorage.setItem("repName", name);
+    else localStorage.removeItem("repName");
   };
 
   const toggleCheck = (id) => {
@@ -1273,10 +1333,10 @@ export default function App() {
 
   const toggleLeadMark = (lead, key) => {
     setSelectedId(lead.id);
-    updateLead(toggleMark(lead, key));
+    updateLead(toggleMark(lead, key, repName));
   };
 
-  const commentLead = (lead, text) => updateLead(addComment(lead, text));
+  const commentLead = (lead, text) => updateLead(addComment(lead, text, repName));
 
   const selectList = (list) => {
     setListFilter(list);
@@ -1466,6 +1526,13 @@ export default function App() {
               <Search size={17} />
               <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this list by name, city, phone…" />
             </div>
+            <label className={`rep-picker${repName ? "" : " unset"}`} title="Your changes are tagged with this name">
+              <Users size={15} />
+              <select value={repName} onChange={(e) => setRep(e.target.value)}>
+                <option value="">I am…</option>
+                {SALES_REPS.map((name) => <option key={name} value={name}>{name}</option>)}
+              </select>
+            </label>
             <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => importXlsx(e.target.files?.[0])} hidden />
             <button className="button ghost" onClick={() => fileRef.current?.click()}><Import size={16} /> Import</button>
             <button className="button ghost" onClick={() => exportCsv(sortedLeads)} title="Exports the current view"><Download size={16} /> Export</button>
