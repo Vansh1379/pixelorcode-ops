@@ -28,10 +28,16 @@ import {
   Trash2,
   Users,
   X,
+  Play,
+  Pause,
+  Square,
+  Flame,
+  Eye,
 } from "lucide-react";
 import pixelorCodeLogo from "./assets/pixelorcode-profile.png";
 import {
   deleteLeadRecord,
+  deleteLeadsByList,
   getProposalPdfUrl,
   isSupabaseConfigured,
   loadWorkspaceData,
@@ -42,6 +48,8 @@ import {
   uploadProposalPdf,
 } from "./lib/dataStore";
 import { getCurrentSession, onAuthChange, signInWithPassword, signOut } from "./lib/supabaseClient";
+import { parseDocx } from "./lib/docxParser";
+import { FireQueue, getOutreachTemplates } from "./lib/fireQueue";
 
 const EMPTY_DATA = {
   __version: "loading",
@@ -75,7 +83,7 @@ const EXPORT_PASSWORD = "vansh1379";
 const SALES_REPS = ["Rishav", "Vansh", "Sales 1", "Sales 2", "Sales 3"];
 // Lists that always show in the sidebar even with 0 leads (so you can fill them later).
 const ALWAYS_SHOW_LISTS = ["Custom"];
-const VIEWS = ["command", "followups", "leads", "outreach", "proposals", "clients", "reports", "settings"];
+const VIEWS = ["command", "followups", "leads", "outreach", "proposals", "clients", "reports", "settings", "bulk-fire"];
 
 // The magic-link redirect lands with #access_token=…&refresh_token=… in the hash.
 // Only treat the hash as a view name if it's actually one of our views.
@@ -703,7 +711,19 @@ function LeadEditor({ lead, onClose, onSave }) {
   );
 }
 
-function Sidebar({ lists, listCounts, totalCount, activeList, onSelectList, collapsed, onToggle, onSignOut, canSignOut }) {
+function Sidebar({ 
+  lists, 
+  listCounts, 
+  totalCount, 
+  activeList, 
+  onSelectList, 
+  collapsed, 
+  onToggle, 
+  onSignOut, 
+  canSignOut,
+  activeView,
+  onNavigate
+}) {
   return (
     <aside className={`sidebar${collapsed ? " collapsed" : ""}`}>
       <div className="brand">
@@ -718,14 +738,52 @@ function Sidebar({ lists, listCounts, totalCount, activeList, onSelectList, coll
       </div>
 
       <nav>
-        <button className={activeList === "All lists" ? "active" : ""} onClick={() => onSelectList("All lists")} title={collapsed ? "All leads" : undefined}>
+        <button 
+          className={activeView !== "bulk-fire" && activeView !== "proposals" && activeView !== "reports" && activeView !== "settings" && activeList === "All lists" ? "active" : ""} 
+          onClick={() => {
+            onSelectList("All lists");
+            onNavigate("leads");
+          }} 
+          title={collapsed ? "All leads" : undefined}
+        >
           <LayoutDashboard size={18} />
           <span>All leads</span>
           <em>{totalCount}</em>
         </button>
+
+        {!collapsed && <div className="nav-label">Operations</div>}
+        
+        <button 
+          className={activeView === "bulk-fire" ? "active" : ""} 
+          onClick={() => onNavigate("bulk-fire")} 
+          title={collapsed ? "Bulk Fire" : undefined}
+        >
+          <Flame size={18} />
+          <span>Bulk Fire</span>
+        </button>
+
+
+
+        <button 
+          className={activeView === "settings" ? "active" : ""} 
+          onClick={() => onNavigate("settings")} 
+          title={collapsed ? "Settings" : undefined}
+        >
+          <Settings size={18} />
+          <span>Settings</span>
+        </button>
+
         {!collapsed && <div className="nav-label">Lists</div>}
         {lists.map((list) => (
-          <button key={list} className={activeList === list ? "active" : ""} onClick={() => onSelectList(list)} title={collapsed ? list : undefined}>
+          <button 
+            key={list} 
+            className={activeView !== "bulk-fire" && activeView !== "proposals" && activeView !== "reports" && activeView !== "settings" && activeList === list ? "active" : ""} 
+            onClick={() => {
+              onSelectList(list);
+              onNavigate("leads");
+            }} 
+            title={collapsed ? list : undefined}
+          >
             <FileSpreadsheet size={18} />
             <span>{list}</span>
             <em>{listCounts[list] || 0}</em>
@@ -1060,6 +1118,596 @@ function ReportsView({ leads, lists }) {
   );
 }
 
+function SettingsView({
+  repName,
+  onSetRep,
+  googleClientId,
+  onSetGoogleClientId,
+  globalSignature,
+  onSetGlobalSignature
+}) {
+  return (
+    <div className="settings-page panel">
+      <div className="panel-title">
+        <div>
+          <p>Configuration</p>
+          <h2>Global settings</h2>
+        </div>
+        <Settings size={20} />
+      </div>
+      <div className="settings-form-grid">
+        <label>
+          Sales representative name
+          <select value={repName} onChange={(e) => onSetRep(e.target.value)}>
+            <option value="">Select representative...</option>
+            {SALES_REPS.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        
+        <label>
+          Google OAuth Client ID
+          <input 
+            type="text" 
+            value={googleClientId} 
+            onChange={(e) => onSetGoogleClientId(e.target.value)} 
+            placeholder="xxxxxx-xxxxxxxx.apps.googleusercontent.com" 
+          />
+          <small className="help-text">Used to connect your Gmail account in the Bulk Fire Console. Create this in Google Cloud Console with the gmail.send and userinfo.email scopes.</small>
+        </label>
+        
+        <label className="span-2">
+          Global Email Signature (Strips from templates, appends this one)
+          <textarea 
+            rows="3" 
+            value={globalSignature} 
+            onChange={(e) => onSetGlobalSignature(e.target.value)} 
+            placeholder="Regards,&#10;Vansh | PixelorCode&#10;pixelorcode.com" 
+          />
+        </label>
+
+        <div className="throttle-config span-2">
+          <h3>Email Sending Settings</h3>
+          <p className="help-text" style={{ margin: 0 }}>
+            🛡️ Emails are sent <strong>one-by-one</strong> inside sequential <strong>5-minute blocks</strong>. 
+            The exact send time within each block is randomized to prevent pattern detection and keep emails safe from spam filters.
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function BulkFireView({
+  leads,
+  onImportLeads,
+  dataMode,
+  saveLeadRecords,
+  setSyncMessage,
+  globalSignature,
+  onUpdateLead,
+  gmailToken,
+  setGmailToken,
+  connectedEmail,
+  setConnectedEmail,
+  googleClientId,
+  setGoogleClientId,
+  onClearLeadsList,
+  queueStatus,
+  setQueueStatus,
+  queueProgress,
+  setQueueProgress,
+  msRemaining,
+  setMsRemaining,
+  queueRunner,
+  setQueueRunner
+}) {
+  const [isParsing, setIsParsing] = useState(false);
+  const [errorMsg, setErrorMsg] = useState("");
+  const [leadsList, setLeadsList] = useState(() => {
+    // Reconstruct parsed playbook leads from the database leads list
+    const playbookLeads = leads.filter(l => l.list === "Outreach Playbook");
+    return playbookLeads.map(l => {
+      const templates = getOutreachTemplates(l.notes) || {
+        day0: { subject: "", body: "" },
+        day3: { subject: "", body: "" },
+        day7: { subject: "", body: "" }
+      };
+      return {
+        ...l,
+        routeType: l.email && l.email.includes("@") ? "Email" : "Manual",
+        routeNotes: l.email && l.email.includes("@") ? `✅ Verified email: ${l.email}` : `◆ Send route: ${l.phone || 'LinkedIn'}`,
+        founders: l.decisionMaker || "",
+        description: l.leadReason || "",
+        templates
+      };
+    });
+  });
+  const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
+  const [filterTab, setFilterTab] = useState("email"); // 'all', 'email', 'manual'
+  const [selectedStep, setSelectedStep] = useState("day0"); // 'day0', 'day3', 'day7'
+  
+  const [logs, setLogs] = useState([]);
+  const [previewLead, setPreviewLead] = useState(null);
+
+  const fileInputRef = useRef(null);
+  const consoleEndRef = useRef(null);
+
+  // Auto-scroll logs
+  useEffect(() => {
+    consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [logs]);
+
+  const handleConnectGmail = () => {
+    const clientId = googleClientId || import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      const customId = window.prompt("Enter your Google OAuth Client ID to connect Gmail:");
+      if (!customId) return;
+      setGoogleClientId(customId);
+      initiateOAuth(customId);
+    } else {
+      initiateOAuth(clientId);
+    }
+  };
+
+  const initiateOAuth = (clientId) => {
+    try {
+      if (!window.google) {
+        window.alert("Google Identity Services library is still loading. Please try again in a few seconds.");
+        return;
+      }
+      const tokenClient = window.google.accounts.oauth2.initTokenClient({
+        client_id: clientId,
+        scope: "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email",
+        callback: (tokenResponse) => {
+          if (tokenResponse.error) {
+            window.alert(`Connection failed: ${tokenResponse.error_description || tokenResponse.error}`);
+            return;
+          }
+          if (tokenResponse.access_token) {
+            setGmailToken(tokenResponse.access_token);
+            sessionStorage.setItem("gmailToken", tokenResponse.access_token);
+            
+            // Fetch profile email
+            fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+              headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
+            })
+              .then(res => res.json())
+              .then(userInfo => {
+                if (userInfo.email) {
+                  setConnectedEmail(userInfo.email);
+                  sessionStorage.setItem("connectedEmail", userInfo.email);
+                }
+              })
+              .catch(err => console.error("Failed to fetch user email", err));
+          }
+        },
+      });
+      tokenClient.requestAccessToken({ prompt: "consent" });
+    } catch (error) {
+      window.alert(`OAuth initiation failed: ${error.message}`);
+    }
+  };
+
+  const handleDisconnectGmail = () => {
+    setGmailToken("");
+    setConnectedEmail("");
+    sessionStorage.removeItem("gmailToken");
+    sessionStorage.removeItem("connectedEmail");
+    if (queueRunner) {
+      queueRunner.stop();
+      setQueueRunner(null);
+    }
+    setQueueStatus("idle");
+  };
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setIsParsing(true);
+    setErrorMsg("");
+    try {
+      const parsed = await parseDocx(file);
+      
+      let saved = [];
+      if (dataMode === "supabase") {
+        const dbRows = await saveLeadRecords(parsed);
+        // Re-merge parser-only fields that aren't stored as DB columns
+        saved = dbRows.map((row) => {
+          const original = parsed.find(p => p.id === row.id) || {};
+          return {
+            ...row,
+            routeType: original.routeType || (row.email && row.email.includes("@") ? "Email" : "Manual"),
+            routeNotes: original.routeNotes || "",
+            founders: original.founders || "",
+            description: original.description || "",
+            warning: original.warning || "",
+            templates: original.templates || { day0: { subject: "", body: "" }, day3: { subject: "", body: "" }, day7: { subject: "", body: "" } },
+          };
+        });
+        setSyncMessage(`${saved.length} leads parsed and auto-saved to database.`);
+      } else {
+        saved = parsed.map((l, idx) => ({ ...l, id: `demo-import-${Date.now()}-${idx}` }));
+        setSyncMessage("Demo Mode: Parsed leads loaded locally.");
+      }
+      
+      onImportLeads(saved);
+      setLeadsList(saved);
+      
+      const initiallyChecked = new Set(
+        saved.filter(l => l.email && l.email.includes("@")).map(l => l.id)
+      );
+      setSelectedLeadIds(initiallyChecked);
+      
+      setLogs([`[System] Parsed playbook successfully. Found ${saved.length} leads.`]);
+    } catch (err) {
+      setErrorMsg(`Failed to parse playbook: ${err.message}`);
+      setLogs(prev => [...prev, `[Error] Failed to parse: ${err.message}`]);
+    } finally {
+      setIsParsing(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+  const handleClearPlaybook = async () => {
+    if (!window.confirm("Are you sure you want to delete all parsed playbook leads?")) return;
+    try {
+      await onClearLeadsList("Outreach Playbook");
+      setLeadsList([]);
+      setSelectedLeadIds(new Set());
+    } catch (err) {
+      window.alert(`Failed to clear playbook leads: ${err.message}`);
+    }
+  };
+
+  const toggleSelectLead = (id) => {
+    setSelectedLeadIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllLeads = (filteredLeads) => {
+    const allSelected = filteredLeads.every(l => selectedLeadIds.has(l.id));
+    setSelectedLeadIds(prev => {
+      const next = new Set(prev);
+      filteredLeads.forEach(l => {
+        if (allSelected) next.delete(l.id);
+        else if (l.email && l.email.includes("@")) next.add(l.id);
+      });
+      return next;
+    });
+  };
+
+  const startBlaster = () => {
+    if (!gmailToken) {
+      window.alert("Please connect your Gmail account first.");
+      return;
+    }
+    
+    const leadsToFire = leadsList.filter(l => selectedLeadIds.has(l.id));
+    if (leadsToFire.length === 0) {
+      window.alert("No leads selected for firing.");
+      return;
+    }
+    
+    const invalidLeads = leadsToFire.filter(l => !l.email || !l.email.includes("@"));
+    if (invalidLeads.length > 0) {
+      window.alert(`Selected leads must have valid emails. The following do not: ${invalidLeads.map(l => l.name).join(", ")}`);
+      return;
+    }
+    
+    setLogs(prev => [...prev, `[System] Starting Blaster for ${leadsToFire.length} leads — sending one-by-one inside 5-minute blocks with randomized send times...`]);
+    
+    const queue = new FireQueue({
+      leads: leadsToFire,
+      accessToken: gmailToken,
+      globalSignature: globalSignature,
+      sequenceStep: selectedStep,
+      onProgress: (current, total) => {
+        setQueueProgress({ current, total });
+      },
+      onTick: (msRemaining) => {
+        setMsRemaining(msRemaining);
+      },
+      onLeadSent: (lead, error) => {
+        const stepLabel = selectedStep === "day0" ? "Day 0 Sent" : selectedStep === "day3" ? "Day 3 Sent" : "Day 7 Sent";
+        if (error) {
+          setLogs(prev => [...prev, `[Error] Failed to send to ${lead.name} (${lead.email}): ${error.message}`]);
+          const updated = {
+            ...lead,
+            lastAction: `Email failed: ${error.message} · ${new Date().toISOString().slice(0, 10)}`,
+            status: "Bounced"
+          };
+          onUpdateLead(updated);
+        } else {
+          setLogs(prev => [...prev, `[Success] ${stepLabel} sent to ${lead.name} (${lead.email})`]);
+          const updated = {
+            ...lead,
+            lastAction: `${stepLabel} · ${new Date().toISOString().slice(0, 10)}`,
+            emailSent: true,
+            status: "Email Sent"
+          };
+          onUpdateLead(updated);
+        }
+      },
+      onComplete: () => {
+        setLogs(prev => [...prev, `[System] All emails dispatched successfully! Completed Blaster.`]);
+        setQueueStatus("completed");
+        setQueueRunner(null);
+      }
+    });
+    
+    setQueueRunner(queue);
+    setQueueStatus("sending");
+    queue.start();
+  };
+
+
+
+  const filteredLeads = leadsList.filter(l => {
+    if (filterTab === "email") return l.routeType === "Email";
+    if (filterTab === "manual") return l.routeType === "Manual";
+    return true;
+  });
+
+  return (
+    <div className="bulk-fire-container">
+      <div className="bulk-fire-header-panel">
+        {/* Upload Panel */}
+        <div className="panel">
+          <div className="panel-title compact">
+            <div>
+              <p>Outreach playbook</p>
+              <h2>Upload Playbook</h2>
+            </div>
+            <Flame size={20} />
+          </div>
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            accept=".docx" 
+            onChange={handleFileUpload} 
+            hidden 
+          />
+          <div className="uploader-box" onClick={() => fileInputRef.current?.click()}>
+            <Flame size={40} className="muted" />
+            <p>{isParsing ? "Extracting playbook data..." : "Click to choose .docx lead playbook"}</p>
+            <span>Will automatically parse, match emails & templates, and save to DB.</span>
+          </div>
+          {errorMsg && <p className="auth-message error" style={{ color: 'var(--red)', marginTop: '10px' }}>{errorMsg}</p>}
+        </div>
+
+        {/* Gmail Card */}
+        <div className="gmail-card">
+          <div className="gmail-card-status">
+            <div className={`gmail-dot ${connectedEmail ? 'connected' : 'disconnected'}`}></div>
+            <div className="gmail-card-details">
+              <h3>Gmail Integration</h3>
+              <p>{connectedEmail ? `Connected as ${connectedEmail}` : "No sender email connected"}</p>
+            </div>
+          </div>
+          <p className="help-text" style={{ margin: 0 }}>
+            Emails will be fired using a secured Google token direct from your browser.
+          </p>
+          <div className="gmail-card-actions" style={{ display: 'flex', gap: '10px' }}>
+            {connectedEmail ? (
+              <button className="button ghost" onClick={handleDisconnectGmail}><X size={15} /> Disconnect account</button>
+            ) : (
+              <button className="button primary" onClick={handleConnectGmail}><Mail size={15} /> Connect Gmail account</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+
+
+      {/* Main Review Panel */}
+      {leadsList.length > 0 && (
+        <div className="panel" style={{ flexGrow: 1 }}>
+          <div className="panel-title" style={{ justifyContent: 'space-between' }}>
+            <div>
+              <p>Review Leads</p>
+              <h2>Playbook Leads List</h2>
+            </div>
+            <div style={{ display: 'flex', gap: '8px' }}>
+              <button 
+                type="button"
+                className="button ghost danger"
+                onClick={handleClearPlaybook}
+                disabled={queueStatus === "sending"}
+              >
+                <Trash2 size={15} /> Clear Playbook
+              </button>
+              {filterTab === "email" && (
+                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <select
+                    value={selectedStep}
+                    onChange={(e) => setSelectedStep(e.target.value)}
+                    style={{
+                      padding: '8px 12px',
+                      borderRadius: '6px',
+                      border: '1px solid var(--line-soft)',
+                      background: 'var(--surface-1)',
+                      color: 'var(--text-main)',
+                      fontSize: '14px',
+                      fontWeight: '500',
+                      cursor: 'pointer',
+                      outline: 'none',
+                      boxShadow: 'var(--shadow-sm)'
+                    }}
+                    disabled={queueStatus === "sending"}
+                  >
+                    <option value="day0">Day 0 Opener</option>
+                    <option value="day3">Day 3 Follow-up</option>
+                    <option value="day7">Day 7 Follow-up</option>
+                  </select>
+                  <button 
+                    className="button primary" 
+                    onClick={startBlaster} 
+                    disabled={queueStatus === "sending" || !connectedEmail}
+                  >
+                    <Flame size={16} /> Fire Blaster Queue
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="table-filter-tabs">
+            <button className={`filter-tab ${filterTab === "email" ? "active" : ""}`} onClick={() => setFilterTab("email")}>Email Blaster Ready ({leadsList.filter(l => l.routeType === "Email").length})</button>
+            <button className={`filter-tab ${filterTab === "manual" ? "active" : ""}`} onClick={() => setFilterTab("manual")}>Manual Routing ({leadsList.filter(l => l.routeType === "Manual").length})</button>
+            <button className={`filter-tab ${filterTab === "all" ? "active" : ""}`} onClick={() => setFilterTab("all")}>All Parsed ({leadsList.length})</button>
+          </div>
+
+          <div className="table-shell" style={{ maxHeight: '350px', overflowY: 'auto', marginTop: '16px' }}>
+            <table className="simple-table">
+              <thead>
+                <tr>
+                  <th style={{ width: '40px' }}>
+                    {filterTab === "email" && (
+                      <input 
+                        type="checkbox" 
+                        checked={filteredLeads.length > 0 && filteredLeads.every(l => selectedLeadIds.has(l.id))}
+                        onChange={() => toggleAllLeads(filteredLeads)}
+                      />
+                    )}
+                  </th>
+                  <th>Company</th>
+                  <th>Route / Contact Address</th>
+                  <th>Method</th>
+                  <th>Preview Message</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredLeads.map((lead) => (
+                  <tr key={lead.id}>
+                    <td>
+                      {lead.routeType === "Email" && (
+                        <input 
+                          type="checkbox" 
+                          checked={selectedLeadIds.has(lead.id)}
+                          onChange={() => toggleSelectLead(lead.id)}
+                        />
+                      )}
+                    </td>
+                    <td>
+                      <strong>{lead.name}</strong>
+                      <span className="help-text">{lead.decisionMaker || lead.founders || "—"}</span>
+                    </td>
+                    <td>
+                      {lead.routeType === "Email" ? (
+                        <a href={`mailto:${lead.email}`}>{lead.email}</a>
+                      ) : (
+                        <span className="help-text" style={{ fontStyle: 'italic' }}>{lead.routeNotes || "No address details"}</span>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`status-badge status-${lead.routeType === "Email" ? "verified" : "interested"}`}>
+                        {lead.routeType}
+                      </span>
+                    </td>
+                    <td>
+                      <button 
+                        type="button" 
+                        className="button ghost compact"
+                        onClick={() => setPreviewLead(lead)}
+                      >
+                        <Eye size={13} /> View {selectedStep === "day0" ? "Day 0 Opener" : selectedStep === "day3" ? "Day 3 Follow-up" : "Day 7 Follow-up"}
+                      </button>
+                    </td>
+                    <td>
+                      <StatusBadge status={lead.status} />
+                      {lead.status === "Email Sent" && lead.lastAction && (
+                        <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '6px' }}>
+                          {lead.lastAction.split(' · ')[0]}
+                        </div>
+                      )}
+                      {lead.status === "Bounced" && lead.lastAction && lead.lastAction.includes("Email failed:") && (
+                        <div style={{ color: 'var(--red)', fontSize: '11px', marginTop: '6px', maxWidth: '180px', lineBreak: 'anywhere' }} title={lead.lastAction.split(' · ')[0]}>
+                          {lead.lastAction.split(' · ')[0].replace("Email failed: ", "")}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+
+        </div>
+      )}
+
+      {/* Message Preview Modal */}
+      {previewLead && (
+        <div className="modal-backdrop">
+          <div className="modal" style={{ width: 'min(640px, 100%)' }}>
+            <div className="modal-head">
+              <div>
+                <p>Email Template Preview</p>
+                <h2>{previewLead.name} outreach sequence</h2>
+              </div>
+              <button type="button" className="icon-button" onClick={() => setPreviewLead(null)}><X size={18} /></button>
+            </div>
+            
+            <div className="modal-content" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+              {(() => {
+                const tpl = previewLead.templates || getOutreachTemplates(previewLead.notes) || {};
+                return (
+                  <>
+                    <div>
+                      <strong>Day 0 Opener</strong>
+                      <div style={{ border: '1px solid var(--line-soft)', padding: '12px', borderRadius: '4px', background: 'var(--surface-2)', marginTop: '8px' }}>
+                        <p style={{ margin: '0 0 8px 0', borderBottom: '1px solid var(--line-soft)', paddingBottom: '8px' }}>
+                          <strong>Subject:</strong> {tpl.day0?.subject || `Concept proposal for ${previewLead.name}`}
+                        </p>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px' }}>
+                          {tpl.day0?.body || "—"}
+                        </pre>
+                      </div>
+                    </div>
+
+                    <div>
+                      <strong>Day 3 Follow-up</strong>
+                      <div style={{ border: '1px solid var(--line-soft)', padding: '12px', borderRadius: '4px', background: 'var(--surface-2)', marginTop: '8px' }}>
+                        <p style={{ margin: '0 0 8px 0', borderBottom: '1px solid var(--line-soft)', paddingBottom: '8px' }}>
+                          <strong>Subject:</strong> {tpl.day3?.subject || "—"}
+                        </p>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px' }}>
+                          {tpl.day3?.body || "—"}
+                        </pre>
+                      </div>
+                    </div>
+
+                    <div>
+                      <strong>Day 7 Follow-up</strong>
+                      <div style={{ border: '1px solid var(--line-soft)', padding: '12px', borderRadius: '4px', background: 'var(--surface-2)', marginTop: '8px' }}>
+                        <p style={{ margin: '0 0 8px 0', borderBottom: '1px solid var(--line-soft)', paddingBottom: '8px' }}>
+                          <strong>Subject:</strong> {tpl.day7?.subject || "—"}
+                        </p>
+                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px' }}>
+                          {tpl.day7?.body || "—"}
+                        </pre>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+            </div>
+            
+            <div className="modal-actions">
+              <button className="button primary" onClick={() => setPreviewLead(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [data, setData] = useState(EMPTY_DATA);
   const [dataMode, setDataMode] = useState(isSupabaseConfigured ? "supabase" : "demo");
@@ -1084,6 +1732,62 @@ export default function App() {
   const [checkedIds, setCheckedIds] = useState(() => new Set());
   const [lastBulk, setLastBulk] = useState(null);
   const fileRef = useRef(null);
+
+  // GSI and Bulk Fire state declarations
+  const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem("googleClientId") || import.meta.env.VITE_GOOGLE_CLIENT_ID || "");
+  const [globalSignature, setGlobalSignature] = useState(() => localStorage.getItem("globalSignature") || "");
+
+  const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem("gmailToken") || "");
+  const [connectedEmail, setConnectedEmail] = useState(() => sessionStorage.getItem("connectedEmail") || "");
+
+  // Global queue state — lives in App so it persists across view switches
+  const [queueStatus, setQueueStatus] = useState("idle");
+  const [queueProgress, setQueueProgress] = useState({ current: 0, total: 0 });
+  const [msRemaining, setMsRemaining] = useState(0);
+  const [queueRunner, setQueueRunner] = useState(null);
+
+  const formatCountdown = (ms) => {
+    if (ms <= 0) return "0:00";
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const pauseBlaster = () => {
+    if (queueRunner) {
+      queueRunner.pause();
+      setQueueStatus("paused");
+    }
+  };
+
+  const resumeBlaster = () => {
+    if (queueRunner) {
+      setQueueStatus("sending");
+      queueRunner.start();
+    }
+  };
+
+  const resetBlaster = () => {
+    if (queueRunner) {
+      queueRunner.stop();
+    }
+    setQueueRunner(null);
+    setQueueStatus("idle");
+    setQueueProgress({ current: 0, total: 0 });
+    setMsRemaining(0);
+  };
+
+  // Load Google Identity Services script dynamically
+  useEffect(() => {
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    document.body.appendChild(script);
+    return () => {
+      document.body.removeChild(script);
+    };
+  }, []);
 
   useEffect(() => {
     setPage(0);
@@ -1375,6 +2079,17 @@ export default function App() {
     }
   };
 
+  const clearLeadsList = async (listName) => {
+    const nextLeads = data.leads.filter((item) => item.list !== listName);
+    setData({ ...data, leads: nextLeads });
+    try {
+      if (dataMode === "supabase") await deleteLeadsByList(listName);
+      setSyncMessage(dataMode === "supabase" ? `Cleared all leads from "${listName}"` : "Demo mode: list cleared locally");
+    } catch (error) {
+      setSyncMessage(`Failed to clear list: ${error.message}`);
+    }
+  };
+
   const addProposal = async (proposal, proposalFile) => {
     const proposalWithFile = {
       ...proposal,
@@ -1500,69 +2215,161 @@ export default function App() {
     ...MARKS.map((mark) => ({ key: mark.key, label: mark.label, value: stats[mark.key], tone: mark.tone, icon: mark.icon })),
   ];
 
-  return (
-    <div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
-      <Sidebar
-        lists={lists}
-        listCounts={listCounts}
-        totalCount={data.leads.length}
-        activeList={listFilter}
-        onSelectList={selectList}
-        collapsed={sidebarCollapsed}
-        onToggle={toggleSidebar}
-        onSignOut={handleSignOut}
-        canSignOut={isSupabaseConfigured && Boolean(session)}
-      />
 
-      <main>
-        <header className="topbar">
-          <div>
-            <p>PixelOrCode lead desk</p>
-            <h1>{listTitle}</h1>
-            <span className={`sync-pill ${dataMode === "supabase" ? "connected" : "demo"}`}>
-              {isLoading ? "Loading…" : syncMessage}
-            </span>
-          </div>
-          <div className="top-actions">
-            <div className="search-box">
-              <Search size={17} />
-              <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this list by name, city, phone…" />
-            </div>
-            <label className={`rep-picker${repName ? "" : " unset"}`} title="Your changes are tagged with this name">
-              <Users size={15} />
-              <select value={repName} onChange={(e) => setRep(e.target.value)}>
-                <option value="">I am…</option>
-                {SALES_REPS.map((name) => <option key={name} value={name}>{name}</option>)}
-              </select>
-            </label>
-            <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => importXlsx(e.target.files?.[0])} hidden />
-            <button className="button ghost" onClick={() => fileRef.current?.click()}><Import size={16} /> Import</button>
-            <button className="button ghost" onClick={() => exportCsv(sortedLeads)} title="Exports the current view"><Download size={16} /> Export</button>
-            <button className="button primary" onClick={() => setIsCreating(true)}><Plus size={16} /> Add lead</button>
-          </div>
-        </header>
+  // Routing render helpers
+  const getTopbarTitle = () => {
+    switch (activeView) {
+      case "proposals": return "Proposals & Closed Revenue";
+      case "reports": return "Performance Reports";
+      case "settings": return "CRM Settings";
+      case "bulk-fire": return "Bulk Lead Fire Console";
+      default: return listTitle;
+    }
+  };
 
-        <section className="stats-grid simple-stats">
-          {markCards.map((card) => (
-            <StatCard
-              key={card.key}
-              label={card.label}
-              value={(card.value || 0).toLocaleString("en-IN")}
-              sublabel={card.key === "all" ? (listFilter === "All lists" ? "Across all lists" : "In this list") : "Click to filter"}
-              icon={card.icon}
-              tone={card.tone}
-              active={markFilter === card.key}
-              onClick={() => setMarkFilter(card.key)}
-            />
-          ))}
-        </section>
+  const getTopbarSubtitle = () => {
+    switch (activeView) {
+      case "proposals": return "Track deals and proposal PDFs";
+      case "reports": return "Reply rates and team activity scoreboards";
+      case "settings": return "Manage your account, templates and credentials";
+      case "bulk-fire": return "Import outreach sequences and blast them via Gmail";
+      default: return "PixelOrCode lead desk";
+    }
+  };
 
-        <section className="workspace">
-          <div className="workspace-main">
-            {isLoading ? (
-              <div className="empty">Loading leads…</div>
-            ) : (
-              <>
+  const renderTopbarActions = () => {
+    if (activeView === "settings") {
+      return null;
+    }
+    if (activeView === "reports") {
+      return (
+        <button className="button ghost" onClick={() => navigate("leads")}><LayoutDashboard size={16} /> Lead Dashboard</button>
+      );
+    }
+    if (activeView === "proposals") {
+      return (
+        <button className="button ghost" onClick={() => navigate("leads")}><LayoutDashboard size={16} /> Lead Dashboard</button>
+      );
+    }
+    if (activeView === "bulk-fire") {
+      return (
+        <button className="button ghost" onClick={() => navigate("leads")}><LayoutDashboard size={16} /> Lead Dashboard</button>
+      );
+    }
+
+    // Default topbar actions for leads explorer
+    return (
+      <>
+        <div className="search-box">
+          <Search size={17} />
+          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this list by name, city, phone…" />
+        </div>
+        <label className={`rep-picker${repName ? "" : " unset"}`} title="Your changes are tagged with this name">
+          <Users size={15} />
+          <select value={repName} onChange={(e) => setRep(e.target.value)}>
+            <option value="">I am…</option>
+            {SALES_REPS.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select>
+        </label>
+        <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => importXlsx(e.target.files?.[0])} hidden />
+        <button className="button ghost" onClick={() => fileRef.current?.click()}><Import size={16} /> Import</button>
+        <button className="button ghost" onClick={() => exportCsv(sortedLeads)} title="Exports the current view"><Download size={16} /> Export</button>
+        <button className="button primary" onClick={() => setIsCreating(true)}><Plus size={16} /> Add lead</button>
+      </>
+    );
+  };
+
+  const renderViewContent = () => {
+    if (isLoading) {
+      return <div className="empty">Loading leads…</div>;
+    }
+    
+    switch (activeView) {
+      case "proposals":
+        return (
+          <ProposalsView 
+            proposals={data.proposals} 
+            leads={data.leads} 
+            onAddProposal={addProposal} 
+          />
+        );
+      case "reports":
+        return <ReportsView leads={data.leads} lists={lists} />;
+      case "settings":
+        return (
+          <SettingsView 
+            repName={repName}
+            onSetRep={setRep}
+            googleClientId={googleClientId}
+            onSetGoogleClientId={(id) => {
+              setGoogleClientId(id);
+              localStorage.setItem("googleClientId", id);
+            }}
+            globalSignature={globalSignature}
+            onSetGlobalSignature={(sig) => {
+              setGlobalSignature(sig);
+              localStorage.setItem("globalSignature", sig);
+            }}
+
+          />
+        );
+      case "bulk-fire":
+        return (
+          <BulkFireView 
+            leads={data.leads}
+            onImportLeads={(importedLeads) => {
+              setData(current => {
+                const existingIds = new Set(current.leads.map(l => l.id));
+                // Strip parser-only fields before adding to the main leads array
+                const cleaned = importedLeads
+                  .filter(l => !existingIds.has(l.id))
+                  .map(({ templates, routeType, routeNotes, founders, description, warning, ...rest }) => rest);
+                return { ...current, leads: [...cleaned, ...current.leads] };
+              });
+            }}
+            dataMode={dataMode}
+            saveLeadRecords={saveLeadRecords}
+            setSyncMessage={setSyncMessage}
+            globalSignature={globalSignature}
+            onUpdateLead={updateLead}
+            gmailToken={gmailToken}
+            setGmailToken={setGmailToken}
+            connectedEmail={connectedEmail}
+            setConnectedEmail={setConnectedEmail}
+            googleClientId={googleClientId}
+            setGoogleClientId={setGoogleClientId}
+            onClearLeadsList={clearLeadsList}
+            queueStatus={queueStatus}
+            setQueueStatus={setQueueStatus}
+            queueProgress={queueProgress}
+            setQueueProgress={setQueueProgress}
+            msRemaining={msRemaining}
+            setMsRemaining={setMsRemaining}
+            queueRunner={queueRunner}
+            setQueueRunner={setQueueRunner}
+          />
+        );
+      default:
+        // Default leads explorer view
+        return (
+          <>
+            <section className="stats-grid simple-stats">
+              {markCards.map((card) => (
+                <StatCard
+                  key={card.key}
+                  label={card.label}
+                  value={(card.value || 0).toLocaleString("en-IN")}
+                  sublabel={card.key === "all" ? (listFilter === "All lists" ? "Across all lists" : "In this list") : "Click to filter"}
+                  icon={card.icon}
+                  tone={card.tone}
+                  active={markFilter === card.key}
+                  onClick={() => setMarkFilter(card.key)}
+                />
+              ))}
+            </section>
+            
+            <section className="workspace">
+              <div className="workspace-main">
                 <div className="toolbar">
                   <div>
                     <h2>{listTitle}</h2>
@@ -1597,12 +2404,78 @@ export default function App() {
                     <button className="button ghost" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)}>Next</button>
                   </div>
                 )}
-              </>
-            )}
-          </div>
+              </div>
+              <LeadDetail lead={selectedLead} onToggleMark={toggleLeadMark} onComment={commentLead} onEdit={setEditingLead} />
+            </section>
+          </>
+        );
+    }
+  };
 
-          <LeadDetail lead={selectedLead} onToggleMark={toggleLeadMark} onComment={commentLead} onEdit={setEditingLead} />
-        </section>
+  return (
+    <div className={`app${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+      <Sidebar
+        lists={lists}
+        listCounts={listCounts}
+        totalCount={data.leads.length}
+        activeList={listFilter}
+        onSelectList={selectList}
+        collapsed={sidebarCollapsed}
+        onToggle={toggleSidebar}
+        onSignOut={handleSignOut}
+        canSignOut={isSupabaseConfigured && Boolean(session)}
+        activeView={activeView}
+        onNavigate={navigate}
+      />
+
+      <main>
+        <header className="topbar">
+          <div>
+            <p>{getTopbarSubtitle()}</p>
+            <h1>{getTopbarTitle()}</h1>
+            <span className={`sync-pill ${dataMode === "supabase" ? "connected" : "demo"}`}>
+              {isLoading ? "Loading…" : syncMessage}
+            </span>
+          </div>
+          <div className="top-actions">
+            {renderTopbarActions()}
+          </div>
+        </header>
+
+        {/* Global queue progress banner — always visible on any page */}
+        {queueStatus !== "idle" && (
+          <div className="progress-banner" style={{ margin: '0 0 16px' }}>
+            <div className="progress-banner-main">
+              <strong>
+                {queueStatus === "sending" && `📨 Sending emails: ${queueProgress.current} of ${queueProgress.total} sent`}
+                {queueStatus === "paused" && `⏸ Paused — ${queueProgress.current} of ${queueProgress.total} sent`}
+                {queueStatus === "completed" && "✅ All emails sent successfully!"}
+              </strong>
+              <span className="help-text" style={{ color: 'inherit' }}>
+                {queueStatus === "sending" && msRemaining > 0 && `Next email in ${formatCountdown(msRemaining)}`}
+                {queueStatus === "sending" && " · ⚠️ Do not close this tab — you can switch tabs but keep this one open."}
+                {queueStatus === "paused" && "Click Resume to continue sending."}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ width: `${(queueProgress.current / queueProgress.total) * 100}%` }}
+                ></div>
+              </div>
+              {queueStatus === "sending" && (
+                <button className="button ghost" onClick={pauseBlaster}><Pause size={14} /> Pause</button>
+              )}
+              {queueStatus === "paused" && (
+                <button className="button primary" onClick={resumeBlaster}><Play size={14} /> Resume</button>
+              )}
+              <button className="button ghost danger" onClick={resetBlaster}><Square size={14} /> Stop</button>
+            </div>
+          </div>
+        )}
+
+        {renderViewContent()}
       </main>
 
       {(editingLead || isCreating) && <LeadEditor lead={editingLead} onClose={() => { setEditingLead(null); setIsCreating(false); }} onSave={saveLead} />}

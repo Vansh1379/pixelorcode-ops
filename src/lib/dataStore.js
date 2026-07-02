@@ -206,6 +206,12 @@ export async function deleteLeadRecord(id) {
   if (error) throw error;
 }
 
+export async function deleteLeadsByList(listName) {
+  if (!isSupabaseConfigured) return;
+  const { error } = await requireSupabase().from("leads").delete().eq("list", listName);
+  if (error) throw error;
+}
+
 // Live updates: push every leads row change to the callback so all open
 // browsers stay in sync. Requires Realtime enabled for the `leads` table.
 // Returns an unsubscribe function.
