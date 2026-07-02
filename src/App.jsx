@@ -1168,8 +1168,8 @@ function SettingsView({
         <div className="throttle-config span-2">
           <h3>Email Sending Settings</h3>
           <p className="help-text" style={{ margin: 0 }}>
-            🛡️ Emails are sent <strong>one-by-one</strong> with a <strong>random 1–10 minute gap</strong> between each.
-            This mimics natural human behavior and prevents Gmail from flagging your emails as spam.
+            🛡️ Emails are sent <strong>one-by-one</strong> inside sequential <strong>5-minute blocks</strong>. 
+            The exact send time within each block is randomized to prevent pattern detection and keep emails safe from spam filters.
           </p>
         </div>
       </div>
@@ -1191,7 +1191,15 @@ function BulkFireView({
   setConnectedEmail,
   googleClientId,
   setGoogleClientId,
-  onClearLeadsList
+  onClearLeadsList,
+  queueStatus,
+  setQueueStatus,
+  queueProgress,
+  setQueueProgress,
+  msRemaining,
+  setMsRemaining,
+  queueRunner,
+  setQueueRunner
 }) {
   const [isParsing, setIsParsing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1218,11 +1226,6 @@ function BulkFireView({
   const [filterTab, setFilterTab] = useState("email"); // 'all', 'email', 'manual'
   const [selectedStep, setSelectedStep] = useState("day0"); // 'day0', 'day3', 'day7'
   
-  // Blaster queue states
-  const [queueStatus, setQueueStatus] = useState("idle"); // 'idle', 'sending', 'paused', 'completed'
-  const [queueProgress, setQueueProgress] = useState({ current: 0, total: 0 });
-  const [msRemaining, setMsRemaining] = useState(0);
-  const [queueRunner, setQueueRunner] = useState(null);
   const [logs, setLogs] = useState([]);
   const [previewLead, setPreviewLead] = useState(null);
 
@@ -1233,15 +1236,6 @@ function BulkFireView({
   useEffect(() => {
     consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
-
-  // Clean queue on unmount
-  useEffect(() => {
-    return () => {
-      if (queueRunner) {
-        queueRunner.stop();
-      }
-    };
-  }, [queueRunner]);
 
   const handleConnectGmail = () => {
     const clientId = googleClientId || import.meta.env.VITE_GOOGLE_CLIENT_ID;
@@ -1404,7 +1398,7 @@ function BulkFireView({
       return;
     }
     
-    setLogs(prev => [...prev, `[System] Starting Blaster for ${leadsToFire.length} leads — sending one-by-one with random 1–10 min gaps...`]);
+    setLogs(prev => [...prev, `[System] Starting Blaster for ${leadsToFire.length} leads — sending one-by-one inside 5-minute blocks with randomized send times...`]);
     
     const queue = new FireQueue({
       leads: leadsToFire,
@@ -1450,39 +1444,7 @@ function BulkFireView({
     queue.start();
   };
 
-  const pauseBlaster = () => {
-    if (queueRunner) {
-      queueRunner.pause();
-      setQueueStatus("paused");
-      setLogs(prev => [...prev, `[System] Blaster paused.`]);
-    }
-  };
 
-  const resumeBlaster = () => {
-    if (queueRunner) {
-      setQueueStatus("sending");
-      setLogs(prev => [...prev, `[System] Blaster resumed.`]);
-      queueRunner.start();
-    }
-  };
-
-  const resetBlaster = () => {
-    if (queueRunner) {
-      queueRunner.stop();
-    }
-    setQueueRunner(null);
-    setQueueStatus("idle");
-    setQueueProgress({ current: 0, total: 0 });
-    setMsRemaining(0);
-    setLogs([]);
-  };
-
-  const formatCountdown = (ms) => {
-    if (ms <= 0) return "0:00";
-    const minutes = Math.floor(ms / 60000);
-    const seconds = Math.floor((ms % 60000) / 1000);
-    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
-  };
 
   const filteredLeads = leadsList.filter(l => {
     if (filterTab === "email") return l.routeType === "Email";
@@ -1539,38 +1501,7 @@ function BulkFireView({
         </div>
       </div>
 
-      {/* Queue control banner */}
-      {queueStatus !== "idle" && (
-        <div className="progress-banner">
-          <div className="progress-banner-main">
-            <strong>
-              {queueStatus === "sending" && `📨 Sending emails: ${queueProgress.current} of ${queueProgress.total} sent`}
-              {queueStatus === "paused" && `⏸ Paused — ${queueProgress.current} of ${queueProgress.total} sent`}
-              {queueStatus === "completed" && "✅ All emails sent successfully!"}
-            </strong>
-            <span className="help-text" style={{ color: 'inherit' }}>
-              {queueStatus === "sending" && msRemaining > 0 && `Next email in ${formatCountdown(msRemaining)}`}
-              {queueStatus === "sending" && " · ⚠️ Do not close this tab — you can switch tabs but keep this one open."}
-              {queueStatus === "paused" && "Click Resume to continue sending."}
-            </span>
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
-            <div className="progress-bar-container">
-              <div 
-                className="progress-bar-fill" 
-                style={{ width: `${(queueProgress.current / queueProgress.total) * 100}%` }}
-              ></div>
-            </div>
-            {queueStatus === "sending" && (
-              <button className="button ghost" onClick={pauseBlaster}><Pause size={14} /> Pause</button>
-            )}
-            {queueStatus === "paused" && (
-              <button className="button primary" onClick={resumeBlaster}><Play size={14} /> Resume</button>
-            )}
-            <button className="button ghost danger" onClick={resetBlaster}><Square size={14} /> Stop</button>
-          </div>
-        </div>
-      )}
+
 
       {/* Main Review Panel */}
       {leadsList.length > 0 && (
@@ -1808,6 +1739,43 @@ export default function App() {
 
   const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem("gmailToken") || "");
   const [connectedEmail, setConnectedEmail] = useState(() => sessionStorage.getItem("connectedEmail") || "");
+
+  // Global queue state — lives in App so it persists across view switches
+  const [queueStatus, setQueueStatus] = useState("idle");
+  const [queueProgress, setQueueProgress] = useState({ current: 0, total: 0 });
+  const [msRemaining, setMsRemaining] = useState(0);
+  const [queueRunner, setQueueRunner] = useState(null);
+
+  const formatCountdown = (ms) => {
+    if (ms <= 0) return "0:00";
+    const minutes = Math.floor(ms / 60000);
+    const seconds = Math.floor((ms % 60000) / 1000);
+    return `${minutes}:${seconds.toString().padStart(2, "0")}`;
+  };
+
+  const pauseBlaster = () => {
+    if (queueRunner) {
+      queueRunner.pause();
+      setQueueStatus("paused");
+    }
+  };
+
+  const resumeBlaster = () => {
+    if (queueRunner) {
+      setQueueStatus("sending");
+      queueRunner.start();
+    }
+  };
+
+  const resetBlaster = () => {
+    if (queueRunner) {
+      queueRunner.stop();
+    }
+    setQueueRunner(null);
+    setQueueStatus("idle");
+    setQueueProgress({ current: 0, total: 0 });
+    setMsRemaining(0);
+  };
 
   // Load Google Identity Services script dynamically
   useEffect(() => {
@@ -2371,6 +2339,14 @@ export default function App() {
             googleClientId={googleClientId}
             setGoogleClientId={setGoogleClientId}
             onClearLeadsList={clearLeadsList}
+            queueStatus={queueStatus}
+            setQueueStatus={setQueueStatus}
+            queueProgress={queueProgress}
+            setQueueProgress={setQueueProgress}
+            msRemaining={msRemaining}
+            setMsRemaining={setMsRemaining}
+            queueRunner={queueRunner}
+            setQueueRunner={setQueueRunner}
           />
         );
       default:
@@ -2465,6 +2441,39 @@ export default function App() {
             {renderTopbarActions()}
           </div>
         </header>
+
+        {/* Global queue progress banner — always visible on any page */}
+        {queueStatus !== "idle" && (
+          <div className="progress-banner" style={{ margin: '0 0 16px' }}>
+            <div className="progress-banner-main">
+              <strong>
+                {queueStatus === "sending" && `📨 Sending emails: ${queueProgress.current} of ${queueProgress.total} sent`}
+                {queueStatus === "paused" && `⏸ Paused — ${queueProgress.current} of ${queueProgress.total} sent`}
+                {queueStatus === "completed" && "✅ All emails sent successfully!"}
+              </strong>
+              <span className="help-text" style={{ color: 'inherit' }}>
+                {queueStatus === "sending" && msRemaining > 0 && `Next email in ${formatCountdown(msRemaining)}`}
+                {queueStatus === "sending" && " · ⚠️ Do not close this tab — you can switch tabs but keep this one open."}
+                {queueStatus === "paused" && "Click Resume to continue sending."}
+              </span>
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ width: `${(queueProgress.current / queueProgress.total) * 100}%` }}
+                ></div>
+              </div>
+              {queueStatus === "sending" && (
+                <button className="button ghost" onClick={pauseBlaster}><Pause size={14} /> Pause</button>
+              )}
+              {queueStatus === "paused" && (
+                <button className="button primary" onClick={resumeBlaster}><Play size={14} /> Resume</button>
+              )}
+              <button className="button ghost danger" onClick={resetBlaster}><Square size={14} /> Stop</button>
+            </div>
+          </div>
+        )}
 
         {renderViewContent()}
       </main>

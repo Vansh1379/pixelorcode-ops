@@ -101,14 +101,10 @@ export class FireQueue {
     this.timerId = null;
     this.countdownTimerId = null;
     this.msRemaining = 0;
-  }
 
-  /** Returns a random delay between 1 and 10 minutes (in ms) */
-  getRandomDelay() {
-    const minMinutes = 1;
-    const maxMinutes = 10;
-    const randomMinutes = minMinutes + Math.random() * (maxMinutes - minMinutes);
-    return Math.round(randomMinutes * 60 * 1000);
+    // 5-minute slots for randomized scheduling
+    this.startTime = null;
+    this.slotDurationMs = 5 * 60 * 1000; // 5 minutes (300000ms)
   }
 
   async sendOne() {
@@ -167,13 +163,19 @@ export class FireQueue {
       return;
     }
 
-    // Generate a fresh random delay (1–10 minutes) before sending the next email
-    const randomDelayMs = this.getRandomDelay();
-    this.msRemaining = randomDelayMs;
+    // Schedule next email in its corresponding 5-minute block relative to startTime
+    const nextIndex = this.currentIndex; // 1, 2, 3...
+    const slotStart = this.startTime + (nextIndex * this.slotDurationMs);
+    const randomOffset = Math.random() * this.slotDurationMs;
+    const targetTime = slotStart + randomOffset;
+    
+    const delayMs = Math.max(0, targetTime - Date.now());
+    this.msRemaining = delayMs;
+
     this.startCountdown();
     this.timerId = setTimeout(() => {
       this.sendOne();
-    }, randomDelayMs);
+    }, delayMs);
   }
 
   startCountdown() {
@@ -192,6 +194,14 @@ export class FireQueue {
   start() {
     if (this.status === "sending") return;
     this.status = "sending";
+    
+    // Initialize or adjust startTime relative to current progress
+    if (this.currentIndex === 0) {
+      this.startTime = Date.now();
+    } else {
+      this.startTime = Date.now() - (this.currentIndex * this.slotDurationMs);
+    }
+    
     this.sendOne();
   }
 
@@ -212,6 +222,8 @@ export class FireQueue {
     this.countdownTimerId = null;
     this.currentIndex = 0;
     this.msRemaining = 0;
+    this.startTime = null;
   }
 }
+
 
