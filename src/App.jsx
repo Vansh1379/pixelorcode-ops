@@ -1124,11 +1124,7 @@ function SettingsView({
   googleClientId,
   onSetGoogleClientId,
   globalSignature,
-  onSetGlobalSignature,
-  batchSize,
-  onSetBatchSize,
-  delayMinutes,
-  onSetDelayMinutes
+  onSetGlobalSignature
 }) {
   return (
     <div className="settings-page panel">
@@ -1170,29 +1166,11 @@ function SettingsView({
         </label>
 
         <div className="throttle-config span-2">
-          <h3>Email Blaster Throttle Settings</h3>
-          <div className="form-row-2">
-            <label>
-              Batch Size (number of emails per wave)
-              <input 
-                type="number" 
-                value={batchSize} 
-                onChange={(e) => onSetBatchSize(Number(e.target.value))} 
-                min="1" 
-                max="50" 
-              />
-            </label>
-            <label>
-              Throttle Delay (minutes between waves)
-              <input 
-                type="number" 
-                value={delayMinutes} 
-                onChange={(e) => onSetDelayMinutes(Number(e.target.value))} 
-                min="1" 
-                max="60" 
-              />
-            </label>
-          </div>
+          <h3>Email Sending Settings</h3>
+          <p className="help-text" style={{ margin: 0 }}>
+            🛡️ Emails are sent <strong>one-by-one</strong> with a <strong>random 1–10 minute gap</strong> between each.
+            This mimics natural human behavior and prevents Gmail from flagging your emails as spam.
+          </p>
         </div>
       </div>
     </div>
@@ -1206,8 +1184,6 @@ function BulkFireView({
   saveLeadRecords,
   setSyncMessage,
   globalSignature,
-  batchSize,
-  delayMinutes,
   onUpdateLead,
   gmailToken,
   setGmailToken,
@@ -1428,23 +1404,18 @@ function BulkFireView({
       return;
     }
     
-    setLogs(prev => [...prev, `[System] Starting Blaster for ${leadsToFire.length} leads in waves of ${batchSize}...`]);
+    setLogs(prev => [...prev, `[System] Starting Blaster for ${leadsToFire.length} leads — sending one-by-one with random 1–10 min gaps...`]);
     
     const queue = new FireQueue({
       leads: leadsToFire,
       accessToken: gmailToken,
       globalSignature: globalSignature,
-      batchSize: batchSize,
-      delayMs: delayMinutes * 60 * 1000,
       sequenceStep: selectedStep,
       onProgress: (current, total) => {
         setQueueProgress({ current, total });
       },
       onTick: (msRemaining) => {
         setMsRemaining(msRemaining);
-      },
-      onBatchStart: (batch) => {
-        setLogs(prev => [...prev, `[Blaster] Starting wave for: ${batch.map(l => l.name).join(", ")}`]);
       },
       onLeadSent: (lead, error) => {
         const stepLabel = selectedStep === "day0" ? "Day 0 Sent" : selectedStep === "day3" ? "Day 3 Sent" : "Day 7 Sent";
@@ -1573,13 +1544,14 @@ function BulkFireView({
         <div className="progress-banner">
           <div className="progress-banner-main">
             <strong>
-              {queueStatus === "sending" && `Sending emails: wave in progress (${queueProgress.current}/${queueProgress.total})...`}
-              {queueStatus === "paused" && `Blaster paused (${queueProgress.current}/${queueProgress.total})`}
-              {queueStatus === "completed" && "Blaster completed! All emails fired successfully."}
+              {queueStatus === "sending" && `📨 Sending emails: ${queueProgress.current} of ${queueProgress.total} sent`}
+              {queueStatus === "paused" && `⏸ Paused — ${queueProgress.current} of ${queueProgress.total} sent`}
+              {queueStatus === "completed" && "✅ All emails sent successfully!"}
             </strong>
             <span className="help-text" style={{ color: 'inherit' }}>
-              {queueStatus === "sending" && msRemaining > 0 && `Next batch triggers in ${formatCountdown(msRemaining)}. Keep this browser tab open.`}
-              {queueStatus === "paused" && "Blaster is paused. Click Resume to fire the next wave."}
+              {queueStatus === "sending" && msRemaining > 0 && `Next email in ${formatCountdown(msRemaining)}`}
+              {queueStatus === "sending" && " · ⚠️ Do not close this tab — you can switch tabs but keep this one open."}
+              {queueStatus === "paused" && "Click Resume to continue sending."}
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>
@@ -1595,7 +1567,7 @@ function BulkFireView({
             {queueStatus === "paused" && (
               <button className="button primary" onClick={resumeBlaster}><Play size={14} /> Resume</button>
             )}
-            <button className="button ghost danger" onClick={resetBlaster}><Square size={14} /> Reset Queue</button>
+            <button className="button ghost danger" onClick={resetBlaster}><Square size={14} /> Stop</button>
           </div>
         </div>
       )}
@@ -1833,8 +1805,7 @@ export default function App() {
   // GSI and Bulk Fire state declarations
   const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem("googleClientId") || import.meta.env.VITE_GOOGLE_CLIENT_ID || "");
   const [globalSignature, setGlobalSignature] = useState(() => localStorage.getItem("globalSignature") || "");
-  const [batchSize, setBatchSize] = useState(() => Number(localStorage.getItem("batchSize")) || 5);
-  const [delayMinutes, setDelayMinutes] = useState(() => Number(localStorage.getItem("delayMinutes")) || 2);
+
   const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem("gmailToken") || "");
   const [connectedEmail, setConnectedEmail] = useState(() => sessionStorage.getItem("connectedEmail") || "");
 
@@ -2371,16 +2342,7 @@ export default function App() {
               setGlobalSignature(sig);
               localStorage.setItem("globalSignature", sig);
             }}
-            batchSize={batchSize}
-            onSetBatchSize={(size) => {
-              setBatchSize(size);
-              localStorage.setItem("batchSize", size);
-            }}
-            delayMinutes={delayMinutes}
-            onSetDelayMinutes={(mins) => {
-              setDelayMinutes(mins);
-              localStorage.setItem("delayMinutes", mins);
-            }}
+
           />
         );
       case "bulk-fire":
@@ -2401,8 +2363,6 @@ export default function App() {
             saveLeadRecords={saveLeadRecords}
             setSyncMessage={setSyncMessage}
             globalSignature={globalSignature}
-            batchSize={batchSize}
-            delayMinutes={delayMinutes}
             onUpdateLead={updateLead}
             gmailToken={gmailToken}
             setGmailToken={setGmailToken}

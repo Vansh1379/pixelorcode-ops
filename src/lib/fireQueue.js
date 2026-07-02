@@ -79,22 +79,21 @@ export async function sendGmailMessage(accessToken, to, subject, body, globalSig
 }
 
 /**
- * Throttled Queue Manager to process and fire emails in waves of N every M minutes.
+ * Sequential Email Queue — sends one email at a time with a RANDOM delay (1–10 min) between each.
+ * First email fires instantly, then waits a random 1–10 minutes before the next one.
+ * Randomized gaps prevent Gmail from detecting a pattern and marking emails as spam.
  */
 export class FireQueue {
   constructor(options = {}) {
     this.leads = options.leads || [];
     this.accessToken = options.accessToken;
     this.globalSignature = options.globalSignature || "";
-    this.batchSize = options.batchSize || 5;
-    this.delayMs = options.delayMs || 120000; // default 2 minutes (120000ms)
     this.sequenceStep = options.sequenceStep || "day0"; // 'day0', 'day3', 'day7'
     
     // Callbacks
     this.onProgress = options.onProgress || (() => {});
     this.onComplete = options.onComplete || (() => {});
     this.onLeadSent = options.onLeadSent || (() => {});
-    this.onBatchStart = options.onBatchStart || (() => {});
     this.onTick = options.onTick || (() => {});
 
     this.currentIndex = 0;
@@ -102,26 +101,29 @@ export class FireQueue {
     this.timerId = null;
     this.countdownTimerId = null;
     this.msRemaining = 0;
-    this.activeBatchLeads = [];
   }
 
-  async runNextBatch() {
+  /** Returns a random delay between 1 and 10 minutes (in ms) */
+  getRandomDelay() {
+    const minMinutes = 1;
+    const maxMinutes = 10;
+    const randomMinutes = minMinutes + Math.random() * (maxMinutes - minMinutes);
+    return Math.round(randomMinutes * 60 * 1000);
+  }
+
+  async sendOne() {
     if (this.status !== "sending") return;
 
-    const remainingLeads = this.leads.slice(this.currentIndex);
-    if (remainingLeads.length === 0) {
+    if (this.currentIndex >= this.leads.length) {
       this.status = "completed";
       this.onComplete();
       return;
     }
 
-    const batch = remainingLeads.slice(0, this.batchSize);
-    this.activeBatchLeads = batch;
-    this.onBatchStart(batch);
+    const lead = this.leads[this.currentIndex];
+    const emailAddress = lead.email;
 
-    // Send the batch concurrently
-    const promises = batch.map(async (lead) => {
-      const emailAddress = lead.email;
+    try {
       if (!emailAddress || !emailAddress.includes("@")) {
         throw new Error("Missing or invalid email address");
       }
@@ -148,37 +150,30 @@ export class FireQueue {
         }
       }
 
-      // Dispatch to API
+      // Dispatch single email to API
       await sendGmailMessage(this.accessToken, emailAddress, subject, body, this.globalSignature);
-      return lead;
-    });
+      this.onLeadSent(lead, null);
+    } catch (err) {
+      this.onLeadSent(lead, err);
+    }
 
-    const results = await Promise.allSettled(promises);
-
-    results.forEach((res, index) => {
-      const lead = batch[index];
-      if (res.status === "fulfilled") {
-        this.onLeadSent(lead, null);
-      } else {
-        this.onLeadSent(lead, res.reason);
-      }
-    });
-
-    this.currentIndex += batch.length;
+    this.currentIndex++;
     this.onProgress(this.currentIndex, this.leads.length);
 
+    // Check if all done
     if (this.currentIndex >= this.leads.length) {
       this.status = "completed";
       this.onComplete();
       return;
     }
 
-    // Set up next batch delay
-    this.msRemaining = this.delayMs;
+    // Generate a fresh random delay (1–10 minutes) before sending the next email
+    const randomDelayMs = this.getRandomDelay();
+    this.msRemaining = randomDelayMs;
     this.startCountdown();
     this.timerId = setTimeout(() => {
-      this.runNextBatch();
-    }, this.delayMs);
+      this.sendOne();
+    }, randomDelayMs);
   }
 
   startCountdown() {
@@ -197,7 +192,7 @@ export class FireQueue {
   start() {
     if (this.status === "sending") return;
     this.status = "sending";
-    this.runNextBatch();
+    this.sendOne();
   }
 
   pause() {
@@ -219,3 +214,4 @@ export class FireQueue {
     this.msRemaining = 0;
   }
 }
+
