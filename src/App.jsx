@@ -1179,6 +1179,7 @@ function SettingsView({
 
 function BulkFireView({
   leads,
+  repName,
   onImportLeads,
   dataMode,
   saveLeadRecords,
@@ -1405,6 +1406,8 @@ function BulkFireView({
       accessToken: gmailToken,
       globalSignature: globalSignature,
       sequenceStep: selectedStep,
+      senderName: repName,
+      senderEmail: connectedEmail,
       onProgress: (current, total) => {
         setQueueProgress({ current, total });
       },
@@ -2317,6 +2320,7 @@ export default function App() {
         return (
           <BulkFireView 
             leads={data.leads}
+            repName={repName}
             onImportLeads={(importedLeads) => {
               setData(current => {
                 const existingIds = new Set(current.leads.map(l => l.id));

@@ -29,7 +29,7 @@ export function getOutreachTemplates(notes) {
 /**
  * Base64url encodes an RFC 822 formatted MIME email string.
  */
-export function makeRawEmail(to, subject, body, globalSignature = "") {
+export function makeRawEmail(to, subject, body, globalSignature = "", senderName = "", senderEmail = "") {
   const fullBody = globalSignature ? `${body}\n\n${globalSignature}` : body;
 
   // RFC 2047 MIME encoded-word syntax to handle UTF-8/non-ASCII characters in Subject header safely
@@ -37,8 +37,17 @@ export function makeRawEmail(to, subject, body, globalSignature = "") {
     unescape(encodeURIComponent(subject))
   )}?=`;
 
+  // Build From header safely if senderEmail is provided.
+  // Add company branding to display name if present.
+  let fromHeader = "";
+  if (senderEmail) {
+    const displayName = senderName ? `${senderName} | PixelOrCode` : "PixelOrCode";
+    fromHeader = `From: "${displayName}" <${senderEmail}>`;
+  }
+
   const emailLines = [
     `Date: ${new Date().toUTCString()}`,
+    fromHeader,
     `To: ${to}`,
     `Subject: ${encodedSubject}`,
     "MIME-Version: 1.0",
@@ -46,7 +55,7 @@ export function makeRawEmail(to, subject, body, globalSignature = "") {
     "Content-Transfer-Encoding: 8bit",
     "",
     fullBody,
-  ];
+  ].filter(Boolean);
 
   const rawMime = emailLines.join("\r\n");
 
@@ -67,9 +76,11 @@ export async function sendGmailMessage(
   to,
   subject,
   body,
-  globalSignature = ""
+  globalSignature = "",
+  senderName = "",
+  senderEmail = ""
 ) {
-  const rawBase64 = makeRawEmail(to, subject, body, globalSignature);
+  const rawBase64 = makeRawEmail(to, subject, body, globalSignature, senderName, senderEmail);
 
   const response = await fetch(
     "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -127,6 +138,10 @@ export class FireQueue {
     // Session scheduling parameters
     this.sessionStartTime = null;
     this.sessionSentCount = 0;
+
+    // Sender details for From header alignment
+    this.senderName = options.senderName || "";
+    this.senderEmail = options.senderEmail || "";
   }
 
   async sendOne() {
@@ -184,7 +199,9 @@ export class FireQueue {
         emailAddress,
         subject,
         body,
-        this.globalSignature
+        this.globalSignature,
+        this.senderName,
+        this.senderEmail
       );
       this.onLeadSent(lead, null);
     } catch (err) {
