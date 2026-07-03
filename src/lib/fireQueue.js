@@ -1,4 +1,57 @@
 /**
+ * Processes Spintax curly bracket options (e.g. `{option1|option2}`) and
+ * replaces placeholders (e.g. `{{Name}}`, `{{Company}}`, `{domain}`) case-insensitively.
+ */
+export function processSpintaxAndPlaceholders(text, lead) {
+  if (!text) return "";
+  let current = text;
+  
+  let iterations = 0;
+  const maxIterations = 20;
+  
+  while (current.includes("{") && current.includes("}") && iterations < maxIterations) {
+    iterations++;
+    const nextRegex = /\{([^{}]+)\}/g;
+    let replacedAny = false;
+    
+    current = current.replace(nextRegex, (match, innerContent) => {
+      replacedAny = true;
+      
+      // Spintax check
+      if (innerContent.includes("|")) {
+        const parts = innerContent.split("|");
+        const randomIndex = Math.floor(Math.random() * parts.length);
+        return parts[randomIndex];
+      }
+      
+      const cleanContent = innerContent.trim().toLowerCase();
+      if (cleanContent === "name") {
+        return lead.decisionMaker || lead.name || "";
+      }
+      if (cleanContent === "company" || cleanContent === "practice") {
+        return lead.name || "";
+      }
+      if (cleanContent === "domain") {
+        if (lead.email && lead.email.includes("@")) {
+          return lead.email.split("@")[1];
+        }
+        return lead.name || "";
+      }
+      if (cleanContent === "year") {
+        return new Date().getFullYear().toString();
+      }
+      
+      // If unrecognized, return the inner content to strip braces
+      return innerContent;
+    });
+    
+    if (!replacedAny) break;
+  }
+  
+  return current;
+}
+
+/**
  * Helper to parse templates from a lead's notes field.
  */
 export function getOutreachTemplates(notes) {
@@ -29,8 +82,8 @@ export function getOutreachTemplates(notes) {
 /**
  * Base64url encodes an RFC 822 formatted MIME email string.
  */
-export function makeRawEmail(to, subject, body, globalSignature = "", senderName = "", senderEmail = "") {
-  const fullBody = globalSignature ? `${body}\n\n${globalSignature}` : body;
+export function makeRawEmail(to, subject, body, senderName = "", senderEmail = "") {
+  const fullBody = body;
 
   // RFC 2047 MIME encoded-word syntax to handle UTF-8/non-ASCII characters in Subject header safely
   const encodedSubject = `=?UTF-8?B?${btoa(
@@ -76,11 +129,10 @@ export async function sendGmailMessage(
   to,
   subject,
   body,
-  globalSignature = "",
   senderName = "",
   senderEmail = ""
 ) {
-  const rawBase64 = makeRawEmail(to, subject, body, globalSignature, senderName, senderEmail);
+  const rawBase64 = makeRawEmail(to, subject, body, senderName, senderEmail);
 
   const response = await fetch(
     "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
@@ -115,7 +167,6 @@ export class FireQueue {
   constructor(options = {}) {
     this.leads = options.leads || [];
     this.accessToken = options.accessToken;
-    this.globalSignature = options.globalSignature || "";
     this.sequenceStep = options.sequenceStep || "day0"; // 'day0', 'day3', 'day7'
 
     // Callbacks
@@ -193,13 +244,16 @@ export class FireQueue {
         }
       }
 
+      // Resolve spintax and placeholders in subject and body
+      const resolvedSubject = processSpintaxAndPlaceholders(subject, lead);
+      const resolvedBody = processSpintaxAndPlaceholders(body, lead);
+
       // Dispatch single email to API
       await sendGmailMessage(
         this.accessToken,
         emailAddress,
-        subject,
-        body,
-        this.globalSignature,
+        resolvedSubject,
+        resolvedBody,
         this.senderName,
         this.senderEmail
       );

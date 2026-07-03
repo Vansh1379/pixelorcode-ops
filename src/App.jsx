@@ -1122,9 +1122,7 @@ function SettingsView({
   repName,
   onSetRep,
   googleClientId,
-  onSetGoogleClientId,
-  globalSignature,
-  onSetGlobalSignature
+  onSetGoogleClientId
 }) {
   return (
     <div className="settings-page panel">
@@ -1155,16 +1153,6 @@ function SettingsView({
           <small className="help-text">Used to connect your Gmail account in the Bulk Fire Console. Create this in Google Cloud Console with the gmail.send and userinfo.email scopes.</small>
         </label>
         
-        <label className="span-2">
-          Global Email Signature (Strips from templates, appends this one)
-          <textarea 
-            rows="3" 
-            value={globalSignature} 
-            onChange={(e) => onSetGlobalSignature(e.target.value)} 
-            placeholder="Regards,&#10;Vansh | PixelorCode&#10;pixelorcode.com" 
-          />
-        </label>
-
         <div className="throttle-config span-2">
           <h3>Email Sending Settings</h3>
           <p className="help-text" style={{ margin: 0 }}>
@@ -1184,7 +1172,6 @@ function BulkFireView({
   dataMode,
   saveLeadRecords,
   setSyncMessage,
-  globalSignature,
   onUpdateLead,
   gmailToken,
   setGmailToken,
@@ -1404,7 +1391,6 @@ function BulkFireView({
     const queue = new FireQueue({
       leads: leadsToFire,
       accessToken: gmailToken,
-      globalSignature: globalSignature,
       sequenceStep: selectedStep,
       senderName: repName,
       senderEmail: connectedEmail,
@@ -1738,7 +1724,6 @@ export default function App() {
 
   // GSI and Bulk Fire state declarations
   const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem("googleClientId") || import.meta.env.VITE_GOOGLE_CLIENT_ID || "");
-  const [globalSignature, setGlobalSignature] = useState(() => localStorage.getItem("globalSignature") || "");
 
   const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem("gmailToken") || "");
   const [connectedEmail, setConnectedEmail] = useState(() => sessionStorage.getItem("connectedEmail") || "");
@@ -2308,12 +2293,6 @@ export default function App() {
               setGoogleClientId(id);
               localStorage.setItem("googleClientId", id);
             }}
-            globalSignature={globalSignature}
-            onSetGlobalSignature={(sig) => {
-              setGlobalSignature(sig);
-              localStorage.setItem("globalSignature", sig);
-            }}
-
           />
         );
       case "bulk-fire":
@@ -2334,7 +2313,6 @@ export default function App() {
             dataMode={dataMode}
             saveLeadRecords={saveLeadRecords}
             setSyncMessage={setSyncMessage}
-            globalSignature={globalSignature}
             onUpdateLead={updateLead}
             gmailToken={gmailToken}
             setGmailToken={setGmailToken}
