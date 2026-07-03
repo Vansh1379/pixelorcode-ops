@@ -1119,8 +1119,6 @@ function ReportsView({ leads, lists }) {
 }
 
 function SettingsView({
-  repName,
-  onSetRep,
   googleClientId,
   onSetGoogleClientId
 }) {
@@ -1134,14 +1132,6 @@ function SettingsView({
         <Settings size={20} />
       </div>
       <div className="settings-form-grid">
-        <label>
-          Sales representative name
-          <select value={repName} onChange={(e) => onSetRep(e.target.value)}>
-            <option value="">Select representative...</option>
-            {SALES_REPS.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
-        
         <label>
           Google OAuth Client ID
           <input 
@@ -2286,8 +2276,6 @@ export default function App() {
       case "settings":
         return (
           <SettingsView 
-            repName={repName}
-            onSetRep={setRep}
             googleClientId={googleClientId}
             onSetGoogleClientId={(id) => {
               setGoogleClientId(id);
