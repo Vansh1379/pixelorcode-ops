@@ -1243,7 +1243,9 @@ function BulkFireView({
           }
           if (tokenResponse.access_token) {
             setGmailToken(tokenResponse.access_token);
-            sessionStorage.setItem("gmailToken", tokenResponse.access_token);
+            // Use localStorage so the token survives tab reloads mid-queue.
+            // Google invalidates the token server-side after ~1 hour regardless.
+            localStorage.setItem("gmailToken", tokenResponse.access_token);
             
             // Fetch profile email
             fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
@@ -1253,7 +1255,7 @@ function BulkFireView({
               .then(userInfo => {
                 if (userInfo.email) {
                   setConnectedEmail(userInfo.email);
-                  sessionStorage.setItem("connectedEmail", userInfo.email);
+                  localStorage.setItem("connectedEmail", userInfo.email);
                 }
               })
               .catch(err => console.error("Failed to fetch user email", err));
@@ -1269,8 +1271,8 @@ function BulkFireView({
   const handleDisconnectGmail = () => {
     setGmailToken("");
     setConnectedEmail("");
-    sessionStorage.removeItem("gmailToken");
-    sessionStorage.removeItem("connectedEmail");
+    localStorage.removeItem("gmailToken");
+    localStorage.removeItem("connectedEmail");
     if (queueRunner) {
       queueRunner.stop();
       setQueueRunner(null);
@@ -1470,7 +1472,28 @@ function BulkFireView({
           <p className="help-text" style={{ margin: 0 }}>
             Emails will be fired using a secured Google token direct from your browser.
           </p>
-          <div className="gmail-card-actions" style={{ display: 'flex', gap: '10px' }}>
+          {!connectedEmail && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'flex-start',
+              gap: '8px',
+              padding: '10px 12px',
+              marginTop: '10px',
+              background: 'color-mix(in srgb, var(--red) 12%, transparent)',
+              border: '1px solid color-mix(in srgb, var(--red) 35%, transparent)',
+              borderRadius: '6px',
+              fontSize: '13px',
+              color: 'var(--red)',
+              lineHeight: '1.5'
+            }}>
+              <span style={{ flexShrink: 0, marginTop: '1px' }}>⚠️</span>
+              <span>
+                <strong>Gmail account not connected.</strong> The email <code>From:</code> header will be missing and emails will fail or go to spam.
+                Connect your account before firing the queue.
+              </span>
+            </div>
+          )}
+          <div className="gmail-card-actions" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
             {connectedEmail ? (
               <button className="button ghost" onClick={handleDisconnectGmail}><X size={15} /> Disconnect account</button>
             ) : (
@@ -1715,8 +1738,8 @@ export default function App() {
   // GSI and Bulk Fire state declarations
   const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem("googleClientId") || import.meta.env.VITE_GOOGLE_CLIENT_ID || "");
 
-  const [gmailToken, setGmailToken] = useState(() => sessionStorage.getItem("gmailToken") || "");
-  const [connectedEmail, setConnectedEmail] = useState(() => sessionStorage.getItem("connectedEmail") || "");
+  const [gmailToken, setGmailToken] = useState(() => localStorage.getItem("gmailToken") || "");
+  const [connectedEmail, setConnectedEmail] = useState(() => localStorage.getItem("connectedEmail") || "");
 
   // Global queue state — lives in App so it persists across view switches
   const [queueStatus, setQueueStatus] = useState("idle");
