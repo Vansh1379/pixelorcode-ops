@@ -1,8 +1,15 @@
+function getFirstName(lead) {
+  const name = String(lead.decisionMaker || "").trim();
+  if (!name || /not (found|added|available|confirmed)/i.test(name)) return "";
+  const cleanName = name.replace(/^(dr\.?|mr\.?|mrs\.?|ms\.?)\s+/i, "");
+  return cleanName.split(/\s+/)[0];
+}
+
 /**
  * Processes Spintax curly bracket options (e.g. `{option1|option2}`) and
  * replaces placeholders (e.g. `{{Name}}`, `{{Company}}`, `{domain}`) case-insensitively.
  */
-export function processSpintaxAndPlaceholders(text, lead) {
+export function processSpintaxAndPlaceholders(text, lead, senderName = "", senderEmail = "") {
   if (!text) return "";
   let current = text;
   
@@ -28,8 +35,32 @@ export function processSpintaxAndPlaceholders(text, lead) {
       if (cleanContent === "name") {
         return lead.decisionMaker || lead.name || "";
       }
-      if (cleanContent === "company" || cleanContent === "practice") {
+      if (cleanContent === "firstname" || cleanContent === "first_name") {
+        return getFirstName(lead) || lead.name || "";
+      }
+      if (
+        cleanContent === "company" ||
+        cleanContent === "practice" ||
+        cleanContent === "clinicname" ||
+        cleanContent === "clinic_name" ||
+        cleanContent === "centrename" ||
+        cleanContent === "centre_name" ||
+        cleanContent === "businessname" ||
+        cleanContent === "business_name"
+      ) {
         return lead.name || "";
+      }
+      if (cleanContent === "niche" || cleanContent === "specialty" || cleanContent === "industry") {
+        return lead.niche || "";
+      }
+      if (cleanContent === "location" || cleanContent === "locality" || cleanContent === "city") {
+        return lead.location || "";
+      }
+      if (cleanContent === "rating") {
+        return lead.rating || "";
+      }
+      if (cleanContent === "reviews" || cleanContent === "review_count") {
+        return lead.reviews || "";
       }
       if (cleanContent === "domain") {
         if (lead.email && lead.email.includes("@")) {
@@ -39,6 +70,12 @@ export function processSpintaxAndPlaceholders(text, lead) {
       }
       if (cleanContent === "year") {
         return new Date().getFullYear().toString();
+      }
+      if (cleanContent === "sendername" || cleanContent === "sender_name" || cleanContent === "sender") {
+        return senderName || "";
+      }
+      if (cleanContent === "senderemail" || cleanContent === "sender_email") {
+        return senderEmail || "";
       }
       
       // If unrecognized, return the inner content to strip braces
@@ -245,8 +282,8 @@ export class FireQueue {
       }
 
       // Resolve spintax and placeholders in subject and body
-      const resolvedSubject = processSpintaxAndPlaceholders(subject, lead);
-      const resolvedBody = processSpintaxAndPlaceholders(body, lead);
+      const resolvedSubject = processSpintaxAndPlaceholders(subject, lead, this.senderName, this.senderEmail);
+      const resolvedBody = processSpintaxAndPlaceholders(body, lead, this.senderName, this.senderEmail);
 
       // Dispatch single email to API
       await sendGmailMessage(
