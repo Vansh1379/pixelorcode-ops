@@ -128,11 +128,13 @@ export function makeRawEmail(to, subject, body, senderName = "", senderEmail = "
   )}?=`;
 
   // Build From header safely if senderEmail is provided.
-  // Add company branding to display name if present.
+  // Use the sender's display name verbatim when set; otherwise send with no
+  // display name so only the address shows (no forced company branding).
   let fromHeader = "";
   if (senderEmail) {
-    const displayName = senderName ? `${senderName} | PixelOrCode` : "PixelOrCode";
-    fromHeader = `From: "${displayName}" <${senderEmail}>`;
+    fromHeader = senderName
+      ? `From: "${senderName}" <${senderEmail}>`
+      : `From: ${senderEmail}`;
   }
 
   const emailLines = [
@@ -196,6 +198,38 @@ export async function sendGmailMessage(
 }
 
 /**
+ * Sends a single email through the Hostinger SMTP relay (Vercel serverless
+ * function at /api/send-email). The browser can't speak SMTP directly, so the
+ * function holds the SMTP credentials and connection server-side.
+ */
+export async function sendViaSmtp(to, subject, body, senderName = "", senderEmail = "") {
+  const response = await fetch("/api/send-email", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      to,
+      subject,
+      body,
+      fromName: senderName,
+      fromEmail: senderEmail,
+    }),
+  });
+
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const data = await response.json();
+      detail = data.error || detail;
+    } catch {
+      // response had no JSON body
+    }
+    throw new Error(`SMTP send failed: ${detail}`);
+  }
+
+  return response.json();
+}
+
+/**
  * Sequential Email Queue.
  * First email fires when the queue starts. Every next email waits at least 5 minutes,
  * plus a random 0-5 minute jitter, so only one email can fire in any 5-minute window.
@@ -204,6 +238,7 @@ export class FireQueue {
   constructor(options = {}) {
     this.leads = options.leads || [];
     this.accessToken = options.accessToken;
+    this.provider = options.provider || "gmail"; // 'gmail' | 'smtp'
     this.sequenceStep = options.sequenceStep || "day0"; // 'day0', 'day3', 'day7'
 
     // Callbacks
@@ -285,15 +320,25 @@ export class FireQueue {
       const resolvedSubject = processSpintaxAndPlaceholders(subject, lead, this.senderName, this.senderEmail);
       const resolvedBody = processSpintaxAndPlaceholders(body, lead, this.senderName, this.senderEmail);
 
-      // Dispatch single email to API
-      await sendGmailMessage(
-        this.accessToken,
-        emailAddress,
-        resolvedSubject,
-        resolvedBody,
-        this.senderName,
-        this.senderEmail
-      );
+      // Dispatch single email via the selected provider.
+      if (this.provider === "smtp") {
+        await sendViaSmtp(
+          emailAddress,
+          resolvedSubject,
+          resolvedBody,
+          this.senderName,
+          this.senderEmail
+        );
+      } else {
+        await sendGmailMessage(
+          this.accessToken,
+          emailAddress,
+          resolvedSubject,
+          resolvedBody,
+          this.senderName,
+          this.senderEmail
+        );
+      }
       this.onLeadSent(lead, null);
     } catch (err) {
       this.onLeadSent(lead, err);

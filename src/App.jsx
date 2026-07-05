@@ -1207,6 +1207,18 @@ function BulkFireView({
   const [logs, setLogs] = useState([]);
   const [previewLead, setPreviewLead] = useState(null);
 
+  // Verified "Send mail as" aliases fetched from Gmail settings, and the
+  // address we actually put in the From header (may differ from the
+  // authenticated account, e.g. a professional alias).
+  const [sendAsList, setSendAsList] = useState([]);
+  const [fromAddress, setFromAddress] = useState(() => localStorage.getItem("gmailFromAddress") || "");
+  // Which transport sends the mail: "gmail" (Gmail REST API) or "smtp"
+  // (Hostinger SMTP via the /api/send-email serverless function).
+  const [provider, setProvider] = useState(() => localStorage.getItem("gmailFromProvider") || "gmail");
+
+  // The Hostinger professional mailbox reachable over SMTP. Overridable via env.
+  const HOSTINGER_EMAIL = import.meta.env.VITE_HOSTINGER_EMAIL || "ankit@riaanitconsultants.com";
+
   const fileInputRef = useRef(null);
   const consoleEndRef = useRef(null);
 
@@ -1227,6 +1239,75 @@ function BulkFireView({
     }
   };
 
+  // Pull the account's verified "Send mail as" aliases. The Gmail API sends
+  // from whatever address is in the From header, but ONLY if it is a verified
+  // send-as alias — otherwise Gmail rewrites it to the primary account address.
+  // We list the verified aliases here so the user can pick the professional one
+  // (and so we can default to the account's configured default alias).
+  const fetchSendAsAliases = async (token) => {
+    try {
+      const res = await fetch(
+        "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      if (!res.ok) {
+        console.error("Failed to fetch send-as aliases", await res.text());
+        return;
+      }
+      const data = await res.json();
+      // Only aliases that are usable in a From header: primary address is always
+      // usable; other aliases must have verificationStatus === "accepted".
+      const verified = (data.sendAs || []).filter(
+        (a) => a.isPrimary || a.verificationStatus === "accepted"
+      );
+      setSendAsList(verified);
+
+      // Don't override a deliberate SMTP selection when refreshing the alias list.
+      if (localStorage.getItem("gmailFromProvider") === "smtp") return;
+
+      // Choose a Gmail From address if the user hasn't already picked a valid one.
+      const stored = localStorage.getItem("gmailFromAddress");
+      const storedStillValid = verified.some((a) => a.sendAsEmail === stored);
+      if (!storedStillValid) {
+        const preferred =
+          verified.find((a) => a.isDefault) ||
+          verified.find((a) => !a.isPrimary) ||
+          verified[0];
+        if (preferred) {
+          setProvider("gmail");
+          setFromAddress(preferred.sendAsEmail);
+          localStorage.setItem("gmailFromProvider", "gmail");
+          localStorage.setItem("gmailFromAddress", preferred.sendAsEmail);
+        }
+      } else {
+        setProvider("gmail");
+        setFromAddress(stored);
+        localStorage.setItem("gmailFromProvider", "gmail");
+      }
+    } catch (err) {
+      console.error("Failed to fetch send-as aliases", err);
+    }
+  };
+
+  // If a token is already persisted (e.g. after a reload mid-queue), refresh the
+  // alias list so the From-address picker is populated without reconnecting.
+  useEffect(() => {
+    if (gmailToken) fetchSendAsAliases(gmailToken);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gmailToken]);
+
+  // Dropdown option values are encoded as "<provider>:<email>" so a single
+  // control can switch both the From address and the transport at once.
+  const handleSelectFromAddress = (encoded) => {
+    const sep = encoded.indexOf(":");
+    const nextProvider = encoded.slice(0, sep);
+    const address = encoded.slice(sep + 1);
+    setProvider(nextProvider);
+    setFromAddress(address);
+    localStorage.setItem("gmailFromProvider", nextProvider);
+    localStorage.setItem("gmailFromAddress", address);
+  };
+
   const initiateOAuth = (clientId) => {
     try {
       if (!window.google) {
@@ -1235,7 +1316,8 @@ function BulkFireView({
       }
       const tokenClient = window.google.accounts.oauth2.initTokenClient({
         client_id: clientId,
-        scope: "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email",
+        scope:
+          "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.settings.basic",
         callback: (tokenResponse) => {
           if (tokenResponse.error) {
             window.alert(`Connection failed: ${tokenResponse.error_description || tokenResponse.error}`);
@@ -1246,7 +1328,11 @@ function BulkFireView({
             // Use localStorage so the token survives tab reloads mid-queue.
             // Google invalidates the token server-side after ~1 hour regardless.
             localStorage.setItem("gmailToken", tokenResponse.access_token);
-            
+
+            // Fetch verified send-as aliases so the user can send from the
+            // professional alias instead of the raw @gmail.com account.
+            fetchSendAsAliases(tokenResponse.access_token);
+
             // Fetch profile email
             fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
               headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
@@ -1271,6 +1357,13 @@ function BulkFireView({
   const handleDisconnectGmail = () => {
     setGmailToken("");
     setConnectedEmail("");
+    setSendAsList([]);
+    // Keep an explicit SMTP selection — it doesn't depend on the Gmail account.
+    if (provider !== "smtp") {
+      setFromAddress("");
+      localStorage.removeItem("gmailFromAddress");
+      localStorage.removeItem("gmailFromProvider");
+    }
     localStorage.removeItem("gmailToken");
     localStorage.removeItem("connectedEmail");
     if (queueRunner) {
@@ -1361,11 +1454,15 @@ function BulkFireView({
   };
 
   const startBlaster = () => {
-    if (!gmailToken) {
+    if (provider === "gmail" && !gmailToken) {
       window.alert("Please connect your Gmail account first.");
       return;
     }
-    
+    if (provider === "smtp" && !fromAddress) {
+      window.alert("Select the Hostinger SMTP sender address first.");
+      return;
+    }
+
     const leadsToFire = leadsList.filter(l => selectedLeadIds.has(l.id));
     if (leadsToFire.length === 0) {
       window.alert("No leads selected for firing.");
@@ -1383,9 +1480,12 @@ function BulkFireView({
     const queue = new FireQueue({
       leads: leadsToFire,
       accessToken: gmailToken,
+      provider,
       sequenceStep: selectedStep,
       senderName: repName,
-      senderEmail: connectedEmail,
+      // Use the chosen verified alias as the From address so emails send AS the
+      // professional address. Falls back to the authenticated account.
+      senderEmail: fromAddress || connectedEmail,
       onProgress: (current, total) => {
         setQueueProgress({ current, total });
       },
@@ -1470,9 +1570,11 @@ function BulkFireView({
             </div>
           </div>
           <p className="help-text" style={{ margin: 0 }}>
-            Emails will be fired using a secured Google token direct from your browser.
+            {provider === "smtp"
+              ? "Emails are relayed through Hostinger SMTP via a secure serverless function — no Gmail token used."
+              : "Emails will be fired using a secured Google token direct from your browser."}
           </p>
-          {!connectedEmail && (
+          {provider === "gmail" && !connectedEmail && (
             <div style={{
               display: 'flex',
               alignItems: 'flex-start',
@@ -1488,11 +1590,63 @@ function BulkFireView({
             }}>
               <span style={{ flexShrink: 0, marginTop: '1px' }}>⚠️</span>
               <span>
-                <strong>Gmail account not connected.</strong> The email <code>From:</code> header will be missing and emails will fail or go to spam.
-                Connect your account before firing the queue.
+                <strong>Gmail account not connected.</strong> Connect Gmail to send via the
+                API, or pick the Hostinger SMTP sender below (no Gmail needed).
               </span>
             </div>
           )}
+          <div style={{ marginTop: '12px' }}>
+            <label className="help-text" style={{ display: 'block', marginBottom: '6px', fontWeight: 600 }}>
+              Send emails from
+            </label>
+            <select
+              value={`${provider}:${fromAddress}`}
+              onChange={(e) => handleSelectFromAddress(e.target.value)}
+              disabled={queueStatus === "sending"}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                borderRadius: '6px',
+                border: '1px solid var(--line-soft)',
+                background: 'var(--surface-1)',
+                color: 'var(--text-main)',
+                fontSize: '14px',
+                cursor: 'pointer',
+                outline: 'none',
+              }}
+            >
+              {connectedEmail && sendAsList.length > 0 && (
+                <optgroup label="Gmail API">
+                  {sendAsList.map((a) => (
+                    <option key={`gmail:${a.sendAsEmail}`} value={`gmail:${a.sendAsEmail}`}>
+                      {a.displayName ? `${a.displayName} <${a.sendAsEmail}>` : a.sendAsEmail}
+                      {a.isPrimary ? " · account" : a.isDefault ? " · default alias" : " · alias"}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="Hostinger SMTP (direct)">
+                <option value={`smtp:${HOSTINGER_EMAIL}`}>{HOSTINGER_EMAIL} · SMTP</option>
+              </optgroup>
+            </select>
+            {provider === "smtp" && (
+              <p className="help-text" style={{ margin: '6px 0 0 0', color: 'var(--green, #2e9e5b)' }}>
+                ✓ Emails send directly from <strong>{fromAddress}</strong> via Hostinger SMTP
+                (no Gmail token used).
+              </p>
+            )}
+            {provider === "gmail" && connectedEmail && sendAsList.length === 0 && (
+              <p className="help-text" style={{ margin: '6px 0 0 0' }}>
+                Loading verified send-as addresses… If none appear, verify the alias under
+                Gmail → Settings → Accounts → “Send mail as”, then reconnect.
+              </p>
+            )}
+            {provider === "gmail" && fromAddress && connectedEmail && fromAddress !== connectedEmail && (
+              <p className="help-text" style={{ margin: '6px 0 0 0', color: 'var(--green, #2e9e5b)' }}>
+                ✓ Emails will be sent as <strong>{fromAddress}</strong> (verified Gmail alias).
+              </p>
+            )}
+          </div>
           <div className="gmail-card-actions" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
             {connectedEmail ? (
               <button className="button ghost" onClick={handleDisconnectGmail}><X size={15} /> Disconnect account</button>
@@ -1548,7 +1702,7 @@ function BulkFireView({
                   <button 
                     className="button primary" 
                     onClick={startBlaster} 
-                    disabled={queueStatus === "sending" || !connectedEmail}
+                    disabled={queueStatus === "sending" || (provider === "gmail" && !connectedEmail) || (provider === "smtp" && !fromAddress)}
                   >
                     <Flame size={16} /> Fire Blaster Queue
                   </button>
