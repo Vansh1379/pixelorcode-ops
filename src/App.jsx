@@ -1308,6 +1308,24 @@ function BulkFireView({
     localStorage.setItem("gmailFromAddress", address);
   };
 
+  // Keep the selected provider/address in sync with the options actually shown
+  // in the dropdown. Without this, an unconnected Gmail account leaves the state
+  // on "gmail" with an empty address even though the UI displays the SMTP option
+  // (a <select> just shows its first option), which disables the Fire button.
+  useEffect(() => {
+    // While a Gmail account is connected but its aliases haven't loaded yet,
+    // don't reconcile — we'd briefly flip to SMTP mid-load.
+    if (connectedEmail && sendAsList.length === 0) return;
+    const gmailValues = connectedEmail ? sendAsList.map((a) => `gmail:${a.sendAsEmail}`) : [];
+    const smtpValue = `smtp:${HOSTINGER_EMAIL}`;
+    const valid = new Set([...gmailValues, smtpValue]);
+    const current = `${provider}:${fromAddress}`;
+    if (!valid.has(current)) {
+      handleSelectFromAddress(gmailValues[0] || smtpValue);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connectedEmail, sendAsList, provider, fromAddress]);
+
   const initiateOAuth = (clientId) => {
     try {
       if (!window.google) {
