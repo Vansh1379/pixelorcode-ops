@@ -1932,32 +1932,8 @@ tbody tr.checked.selected { box-shadow: inset 3px 0 0 var(--ink); }
 }
 .sidebar.collapsed .sidebar-signout span { display: none; }
 
-/* "I am" rep picker in the topbar */
-.rep-picker {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 40px;
-  padding: 0 12px;
-  border: 1px solid rgba(11, 11, 9, 0.18);
-  border-radius: 8px;
-  background: #fffdf7;
-  color: var(--text);
-  font-size: 13px;
-}
-.rep-picker select {
-  border: none;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  cursor: pointer;
-  outline: none;
-}
-.rep-picker.unset {
-  border-color: #c96b32;
-  background: rgba(201, 107, 50, 0.08);
-  color: #c96b32;
-}
+
+
 
 /* Stat row — wraps to fit any number of cards */
 .stats-grid.simple-stats {
@@ -2209,7 +2185,7 @@ table.simple-table {
   .detail-panel { position: static; height: auto; }
 
   .top-actions { gap: 8px; }
-  .rep-picker { width: 100%; }
+
 }
 
 /* Settings Page Styling */

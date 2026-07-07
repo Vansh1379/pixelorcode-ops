@@ -80,7 +80,7 @@ const PROPOSAL_OPTIONS = ["None", "Drafting", "Sent", "Approved", "Rejected", "C
 const OWNERS = ["Unassigned", "Rishav", "Vansh", "Sales Team", "Design", "Ops"];
 const PAGE_SIZE = 100;
 const EXPORT_PASSWORD = "vansh1379";
-const SALES_REPS = ["Rishav", "Vansh", "Sales 1", "Sales 2", "Sales 3"];
+
 // Lists that always show in the sidebar even with 0 leads (so you can fill them later).
 const ALWAYS_SHOW_LISTS = ["Custom"];
 const VIEWS = ["command", "followups", "leads", "outreach", "proposals", "clients", "reports", "settings", "bulk-fire"];
@@ -1157,7 +1157,6 @@ function SettingsView({
 
 function BulkFireView({
   leads,
-  repName,
   onImportLeads,
   dataMode,
   saveLeadRecords,
@@ -1500,7 +1499,7 @@ function BulkFireView({
       accessToken: gmailToken,
       provider,
       sequenceStep: selectedStep,
-      senderName: repName,
+      senderName: "",
       // Use the chosen verified alias as the From address so emails send AS the
       // professional address. Falls back to the authenticated account.
       senderEmail: fromAddress || connectedEmail,
@@ -1892,7 +1891,7 @@ export default function App() {
   const [syncMessage, setSyncMessage] = useState("");
   const [activeView, setActiveView] = useState(initialView);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem("sidebarCollapsed") === "1");
-  const [repName, setRepName] = useState(() => localStorage.getItem("repName") || "");
+
   const [query, setQuery] = useState("");
   const [listFilter, setListFilter] = useState("All lists");
   const [statusFilter, setStatusFilter] = useState("All statuses");
@@ -2098,11 +2097,7 @@ export default function App() {
     });
   };
 
-  const setRep = (name) => {
-    setRepName(name);
-    if (name) localStorage.setItem("repName", name);
-    else localStorage.removeItem("repName");
-  };
+
 
   const toggleCheck = (id) => {
     setCheckedIds((current) => {
@@ -2212,10 +2207,10 @@ export default function App() {
 
   const toggleLeadMark = (lead, key) => {
     setSelectedId(lead.id);
-    updateLead(toggleMark(lead, key, repName));
+    updateLead(toggleMark(lead, key));
   };
 
-  const commentLead = (lead, text) => updateLead(addComment(lead, text, repName));
+  const commentLead = (lead, text) => updateLead(addComment(lead, text));
 
   const selectList = (list) => {
     setListFilter(list);
@@ -2437,13 +2432,7 @@ export default function App() {
           <Search size={17} />
           <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search this list by name, city, phone…" />
         </div>
-        <label className={`rep-picker${repName ? "" : " unset"}`} title="Your changes are tagged with this name">
-          <Users size={15} />
-          <select value={repName} onChange={(e) => setRep(e.target.value)}>
-            <option value="">I am…</option>
-            {SALES_REPS.map((name) => <option key={name} value={name}>{name}</option>)}
-          </select>
-        </label>
+
         <input ref={fileRef} type="file" accept=".xlsx,.csv" onChange={(e) => importXlsx(e.target.files?.[0])} hidden />
         <button className="button ghost" onClick={() => fileRef.current?.click()}><Import size={16} /> Import</button>
         <button className="button ghost" onClick={() => exportCsv(sortedLeads)} title="Exports the current view"><Download size={16} /> Export</button>
@@ -2482,7 +2471,7 @@ export default function App() {
         return (
           <BulkFireView 
             leads={data.leads}
-            repName={repName}
+
             onImportLeads={(importedLeads) => {
               setData(current => {
                 const existingIds = new Set(current.leads.map(l => l.id));
