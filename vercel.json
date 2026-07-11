@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/inngest.js": {
+      "maxDuration": 300
+    },
+    "api/google-oauth.js": {
+      "maxDuration": 60
+    },
+    "api/campaigns.js": {
+      "maxDuration": 60
+    }
+  }
+}

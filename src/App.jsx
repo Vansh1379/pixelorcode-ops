@@ -49,7 +49,7 @@ import {
 } from "./lib/dataStore";
 import { getCurrentSession, onAuthChange, signInWithPassword, signOut } from "./lib/supabaseClient";
 import { parseDocx } from "./lib/docxParser";
-import { FireQueue, getOutreachTemplates } from "./lib/fireQueue";
+import { getOutreachTemplates, processSpintaxAndPlaceholders } from "./lib/fireQueue";
 
 const EMPTY_DATA = {
   __version: "loading",
@@ -144,6 +144,10 @@ function addDaysIso(days) {
   const date = new Date();
   date.setDate(date.getDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function toIstDateTimeLocal(timestamp = Date.now()) {
+  return new Date(timestamp + 330 * 60 * 1000).toISOString().slice(0, 16);
 }
 
 function followUpState(lead) {
@@ -1118,10 +1122,7 @@ function ReportsView({ leads, lists }) {
   );
 }
 
-function SettingsView({
-  googleClientId,
-  onSetGoogleClientId
-}) {
+function SettingsView() {
   return (
     <div className="settings-page panel">
       <div className="panel-title">
@@ -1132,16 +1133,10 @@ function SettingsView({
         <Settings size={20} />
       </div>
       <div className="settings-form-grid">
-        <label>
-          Google OAuth Client ID
-          <input 
-            type="text" 
-            value={googleClientId} 
-            onChange={(e) => onSetGoogleClientId(e.target.value)} 
-            placeholder="xxxxxx-xxxxxxxx.apps.googleusercontent.com" 
-          />
-          <small className="help-text">Used to connect your Gmail account in the Bulk Fire Console. Create this in Google Cloud Console with the gmail.send and userinfo.email scopes.</small>
-        </label>
+        <div>
+          <h3>Google OAuth</h3>
+          <p className="help-text">Configured securely in Vercel. Connect or disconnect your offline Gmail account from the Bulk Fire Console.</p>
+        </div>
         
         <div className="throttle-config span-2">
           <h3>Email Sending Settings</h3>
@@ -1162,12 +1157,8 @@ function BulkFireView({
   saveLeadRecords,
   setSyncMessage,
   onUpdateLead,
-  gmailToken,
-  setGmailToken,
   connectedEmail,
   setConnectedEmail,
-  googleClientId,
-  setGoogleClientId,
   onClearLeadsList,
   queueStatus,
   setQueueStatus,
@@ -1176,7 +1167,9 @@ function BulkFireView({
   msRemaining,
   setMsRemaining,
   queueRunner,
-  setQueueRunner
+  setQueueRunner,
+  authToken,
+  notificationEmail
 }) {
   const [isParsing, setIsParsing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1206,10 +1199,12 @@ function BulkFireView({
   const [logs, setLogs] = useState([]);
   const [previewLead, setPreviewLead] = useState(null);
 
-  // Verified "Send mail as" aliases fetched from Gmail settings, and the
-  // address we actually put in the From header (may differ from the
-  // authenticated account, e.g. a professional alias).
+  // Distinct Gmail/Workspace accounts connected for offline background sends.
   const [sendAsList, setSendAsList] = useState([]);
+  const [campaigns, setCampaigns] = useState([]);
+  const [isStartingCampaign, setIsStartingCampaign] = useState(false);
+  const [sendTiming, setSendTiming] = useState("now");
+  const [scheduledLocal, setScheduledLocal] = useState(() => toIstDateTimeLocal(Date.now() + 60 * 60 * 1000));
   const [fromAddress, setFromAddress] = useState(() => localStorage.getItem("gmailFromAddress") || "");
   // Which transport sends the mail: "gmail" (Gmail REST API) or "smtp"
   // (Hostinger SMTP via the /api/send-email serverless function).
@@ -1226,74 +1221,58 @@ function BulkFireView({
     consoleEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [logs]);
 
-  const handleConnectGmail = () => {
-    const clientId = googleClientId || import.meta.env.VITE_GOOGLE_CLIENT_ID;
-    if (!clientId) {
-      const customId = window.prompt("Enter your Google OAuth Client ID to connect Gmail:");
-      if (!customId) return;
-      setGoogleClientId(customId);
-      initiateOAuth(customId);
-    } else {
-      initiateOAuth(clientId);
-    }
+  const apiRequest = async (url, options = {}) => {
+    const response = await fetch(url, {
+      ...options,
+      headers: {
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        Authorization: `Bearer ${authToken}`,
+        ...(options.headers || {}),
+      },
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+    return data;
   };
 
-  // Pull the account's verified "Send mail as" aliases. The Gmail API sends
-  // from whatever address is in the From header, but ONLY if it is a verified
-  // send-as alias — otherwise Gmail rewrites it to the primary account address.
-  // We list the verified aliases here so the user can pick the professional one
-  // (and so we can default to the account's configured default alias).
-  const fetchSendAsAliases = async (token) => {
+  const loadBackgroundState = async () => {
+    if (!authToken) return;
     try {
-      const res = await fetch(
-        "https://gmail.googleapis.com/gmail/v1/users/me/settings/sendAs",
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      if (!res.ok) {
-        console.error("Failed to fetch send-as aliases", await res.text());
-        return;
-      }
-      const data = await res.json();
-      // Only aliases that are usable in a From header: primary address is always
-      // usable; other aliases must have verificationStatus === "accepted".
-      const verified = (data.sendAs || []).filter(
-        (a) => a.isPrimary || a.verificationStatus === "accepted"
-      );
-      setSendAsList(verified);
-
-      // Don't override a deliberate SMTP selection when refreshing the alias list.
-      if (localStorage.getItem("gmailFromProvider") === "smtp") return;
-
-      // Choose a Gmail From address if the user hasn't already picked a valid one.
-      const stored = localStorage.getItem("gmailFromAddress");
-      const storedStillValid = verified.some((a) => a.sendAsEmail === stored);
-      if (!storedStillValid) {
-        const preferred =
-          verified.find((a) => a.isDefault) ||
-          verified.find((a) => !a.isPrimary) ||
-          verified[0];
-        if (preferred) {
-          setProvider("gmail");
-          setFromAddress(preferred.sendAsEmail);
-          localStorage.setItem("gmailFromProvider", "gmail");
-          localStorage.setItem("gmailFromAddress", preferred.sendAsEmail);
-        }
-      } else {
-        setProvider("gmail");
-        setFromAddress(stored);
-        localStorage.setItem("gmailFromProvider", "gmail");
-      }
-    } catch (err) {
-      console.error("Failed to fetch send-as aliases", err);
+      const [connectionData, campaignData] = await Promise.all([
+        apiRequest("/api/email-connections"),
+        apiRequest("/api/campaigns"),
+      ]);
+      const gmailConnections = (connectionData.connections || []).map((connection) => ({
+        sendAsEmail: connection.email_address,
+        displayName: connection.display_name,
+        isPrimary: true,
+        connectionId: connection.id,
+      }));
+      setSendAsList(gmailConnections);
+      setCampaigns(campaignData.campaigns || []);
+      const selected = gmailConnections.find((item) => item.sendAsEmail === fromAddress) || gmailConnections[0];
+      setConnectedEmail(selected?.sendAsEmail || "");
+    } catch (error) {
+      setErrorMsg(error.message);
     }
   };
 
-  // If a token is already persisted (e.g. after a reload mid-queue), refresh the
-  // alias list so the From-address picker is populated without reconnecting.
   useEffect(() => {
-    if (gmailToken) fetchSendAsAliases(gmailToken);
+    loadBackgroundState();
+    if (!authToken) return undefined;
+    const interval = setInterval(loadBackgroundState, 15000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [gmailToken]);
+  }, [authToken]);
+
+  const handleConnectGmail = async () => {
+    try {
+      const data = await apiRequest("/api/google-oauth");
+      window.location.assign(data.url);
+    } catch (error) {
+      setErrorMsg(`Gmail connection failed: ${error.message}`);
+    }
+  };
 
   // Dropdown option values are encoded as "<provider>:<email>" so a single
   // control can switch both the From address and the transport at once.
@@ -1312,8 +1291,7 @@ function BulkFireView({
   // on "gmail" with an empty address even though the UI displays the SMTP option
   // (a <select> just shows its first option), which disables the Fire button.
   useEffect(() => {
-    // While a Gmail account is connected but its aliases haven't loaded yet,
-    // don't reconcile — we'd briefly flip to SMTP mid-load.
+    // Wait for connected accounts to load before reconciling the selected sender.
     if (connectedEmail && sendAsList.length === 0) return;
     const gmailValues = connectedEmail ? sendAsList.map((a) => `gmail:${a.sendAsEmail}`) : [];
     const smtpValue = `smtp:${HOSTINGER_EMAIL}`;
@@ -1325,69 +1303,26 @@ function BulkFireView({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectedEmail, sendAsList, provider, fromAddress]);
 
-  const initiateOAuth = (clientId) => {
-    try {
-      if (!window.google) {
-        window.alert("Google Identity Services library is still loading. Please try again in a few seconds.");
+  const handleDisconnectGmail = async () => {
+    const connection = sendAsList.find((item) => item.sendAsEmail === fromAddress);
+    if (connection?.connectionId) {
+      try {
+        await apiRequest(`/api/email-connections?id=${encodeURIComponent(connection.connectionId)}`, { method: "DELETE" });
+      } catch (error) {
+        setErrorMsg(`Disconnect failed: ${error.message}`);
         return;
       }
-      const tokenClient = window.google.accounts.oauth2.initTokenClient({
-        client_id: clientId,
-        scope:
-          "https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/gmail.settings.basic",
-        callback: (tokenResponse) => {
-          if (tokenResponse.error) {
-            window.alert(`Connection failed: ${tokenResponse.error_description || tokenResponse.error}`);
-            return;
-          }
-          if (tokenResponse.access_token) {
-            setGmailToken(tokenResponse.access_token);
-            // Use localStorage so the token survives tab reloads mid-queue.
-            // Google invalidates the token server-side after ~1 hour regardless.
-            localStorage.setItem("gmailToken", tokenResponse.access_token);
-
-            // Fetch verified send-as aliases so the user can send from the
-            // professional alias instead of the raw @gmail.com account.
-            fetchSendAsAliases(tokenResponse.access_token);
-
-            // Fetch profile email
-            fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
-              headers: { Authorization: `Bearer ${tokenResponse.access_token}` }
-            })
-              .then(res => res.json())
-              .then(userInfo => {
-                if (userInfo.email) {
-                  setConnectedEmail(userInfo.email);
-                  localStorage.setItem("connectedEmail", userInfo.email);
-                }
-              })
-              .catch(err => console.error("Failed to fetch user email", err));
-          }
-        },
-      });
-      tokenClient.requestAccessToken({ prompt: "consent" });
-    } catch (error) {
-      window.alert(`OAuth initiation failed: ${error.message}`);
     }
-  };
-
-  const handleDisconnectGmail = () => {
-    setGmailToken("");
-    setConnectedEmail("");
-    setSendAsList([]);
-    // Keep an explicit SMTP selection — it doesn't depend on the Gmail account.
-    if (provider !== "smtp") {
-      setFromAddress("");
-      localStorage.removeItem("gmailFromAddress");
-      localStorage.removeItem("gmailFromProvider");
-    }
-    localStorage.removeItem("gmailToken");
+    setFromAddress("");
+    localStorage.removeItem("gmailFromAddress");
+    localStorage.removeItem("gmailFromProvider");
     localStorage.removeItem("connectedEmail");
     if (queueRunner) {
       queueRunner.stop();
       setQueueRunner(null);
     }
     setQueueStatus("idle");
+    await loadBackgroundState();
   };
 
   const handleFileUpload = async (e) => {
@@ -1470,9 +1405,9 @@ function BulkFireView({
     });
   };
 
-  const startBlaster = () => {
-    if (provider === "gmail" && !gmailToken) {
-      window.alert("Please connect your Gmail account first.");
+  const startBlaster = async () => {
+    if (provider === "gmail" && !connectedEmail) {
+      window.alert("Please connect your Gmail account for background access first.");
       return;
     }
     if (provider === "smtp" && !fromAddress) {
@@ -1491,55 +1426,72 @@ function BulkFireView({
       window.alert(`Selected leads must have valid emails. The following do not: ${invalidLeads.map(l => l.name).join(", ")}`);
       return;
     }
-    
-    setLogs(prev => [...prev, `[System] Starting Blaster for ${leadsToFire.length} leads — sending one-by-one inside 5-minute blocks with randomized send times...`]);
-    
-    const queue = new FireQueue({
-      leads: leadsToFire,
-      accessToken: gmailToken,
-      provider,
-      sequenceStep: selectedStep,
-      senderName: "",
-      // Use the chosen verified alias as the From address so emails send AS the
-      // professional address. Falls back to the authenticated account.
-      senderEmail: fromAddress || connectedEmail,
-      onProgress: (current, total) => {
-        setQueueProgress({ current, total });
-      },
-      onTick: (msRemaining) => {
-        setMsRemaining(msRemaining);
-      },
-      onLeadSent: (lead, error) => {
-        const stepLabel = selectedStep === "day0" ? "Day 0 Sent" : selectedStep === "day3" ? "Day 3 Sent" : "Day 7 Sent";
-        if (error) {
-          setLogs(prev => [...prev, `[Error] Failed to send to ${lead.name} (${lead.email}): ${error.message}`]);
-          const updated = {
-            ...lead,
-            lastAction: `Email failed: ${error.message} · ${new Date().toISOString().slice(0, 10)}`,
-            status: "Bounced"
-          };
-          onUpdateLead(updated);
-        } else {
-          setLogs(prev => [...prev, `[Success] ${stepLabel} sent to ${lead.name} (${lead.email})`]);
-          const updated = {
-            ...lead,
-            lastAction: `${stepLabel} · ${new Date().toISOString().slice(0, 10)}`,
-            emailSent: true,
-            status: "Email Sent"
-          };
-          onUpdateLead(updated);
-        }
-      },
-      onComplete: () => {
-        setLogs(prev => [...prev, `[System] All emails dispatched successfully! Completed Blaster.`]);
-        setQueueStatus("completed");
-        setQueueRunner(null);
+    if (sendTiming === "scheduled") {
+      const scheduledMs = Date.parse(`${scheduledLocal}:00+05:30`);
+      if (!scheduledLocal || !Number.isFinite(scheduledMs) || scheduledMs <= Date.now()) {
+        window.alert("Choose a future date and time in IST.");
+        return;
       }
-    });
+      if (scheduledMs > Date.now() + 7 * 24 * 60 * 60 * 1000) {
+        window.alert("On the current Inngest free plan, choose a time within the next 7 days.");
+        return;
+      }
+    }
     
-    setQueueRunner(queue);
-    setQueueStatus("sending");
-    queue.start();
+    const resolveMessage = (lead) => {
+      const templates = getOutreachTemplates(lead.notes) || lead.templates || {};
+      const selected = templates[selectedStep] || {};
+      const fallback = selectedStep === "day3"
+        ? { subject: `Follow-up on proposal for ${lead.name}`, body: `Hi, just following up on our previous email regarding ${lead.name}.` }
+        : selectedStep === "day7"
+          ? { subject: `Final follow-up for ${lead.name}`, body: `Hi, wanted to reach out one last time regarding ${lead.name}.` }
+          : { subject: `Concept proposal for ${lead.name}`, body: `Hi, we sketched a mock concept for ${lead.name}. Open to taking a look?` };
+      return {
+        leadId: lead.id,
+        leadName: lead.name,
+        email: lead.email,
+        subject: processSpintaxAndPlaceholders(selected.subject || fallback.subject, lead, "", fromAddress),
+        body: processSpintaxAndPlaceholders(selected.body || fallback.body, lead, "", fromAddress),
+      };
+    };
+
+    const connection = sendAsList.find((item) => item.sendAsEmail === fromAddress);
+    if (provider === "gmail" && !connection?.connectionId) {
+      window.alert("Reconnect Gmail so it can send while this browser is closed.");
+      return;
+    }
+
+    setIsStartingCampaign(true);
+    setErrorMsg("");
+    try {
+      const result = await apiRequest("/api/campaigns", {
+        method: "POST",
+        body: JSON.stringify({
+          name: `${selectedStep.toUpperCase()} · ${new Date().toLocaleString("en-IN")}`,
+          sequenceStep: selectedStep,
+          provider,
+          connectionId: connection?.connectionId || null,
+          senderEmail: fromAddress,
+          notificationEmail,
+          scheduledAt: sendTiming === "scheduled"
+            ? new Date(`${scheduledLocal}:00+05:30`).toISOString()
+            : new Date().toISOString(),
+          recipients: leadsToFire.map(resolveMessage),
+        }),
+      });
+      const timingLabel = sendTiming === "scheduled"
+        ? `scheduled for ${new Date(`${scheduledLocal}:00+05:30`).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST`
+        : "queued to start now";
+      setLogs(prev => [...prev, `[Background] Campaign ${timingLabel} with ${leadsToFire.length} recipients. You may close this tab or turn off your laptop.`]);
+      setCampaigns(prev => [result.campaign, ...prev]);
+      setSelectedLeadIds(new Set());
+      setSyncMessage("Background campaign queued successfully");
+    } catch (error) {
+      setErrorMsg(`Could not start background campaign: ${error.message}`);
+      setLogs(prev => [...prev, `[Error] Campaign could not be queued: ${error.message}`]);
+    } finally {
+      setIsStartingCampaign(false);
+    }
   };
 
 
@@ -1580,18 +1532,18 @@ function BulkFireView({
         {/* Gmail Card */}
         <div className="gmail-card">
           <div className="gmail-card-status">
-            <div className={`gmail-dot ${connectedEmail ? 'connected' : 'disconnected'}`}></div>
+            <div className={`gmail-dot ${sendAsList.length ? 'connected' : 'disconnected'}`}></div>
             <div className="gmail-card-details">
               <h3>Gmail Integration</h3>
-              <p>{connectedEmail ? `Connected as ${connectedEmail}` : "No sender email connected"}</p>
+              <p>{sendAsList.length ? `${sendAsList.length} Gmail account${sendAsList.length === 1 ? "" : "s"} connected` : "No Gmail account connected"}</p>
             </div>
           </div>
           <p className="help-text" style={{ margin: 0 }}>
             {provider === "smtp"
-              ? "Emails are relayed through Hostinger SMTP via a secure serverless function — no Gmail token used."
-              : "Emails will be fired using a secured Google token direct from your browser."}
+              ? "Background campaigns are relayed through Hostinger SMTP by Vercel and Inngest."
+              : "Gmail is connected for offline sending, so campaigns continue after this browser closes."}
           </p>
-          {provider === "gmail" && !connectedEmail && (
+          {provider === "gmail" && sendAsList.length === 0 && (
             <div style={{
               display: 'flex',
               alignItems: 'flex-start',
@@ -1636,8 +1588,7 @@ function BulkFireView({
                 <optgroup label="Gmail API">
                   {sendAsList.map((a) => (
                     <option key={`gmail:${a.sendAsEmail}`} value={`gmail:${a.sendAsEmail}`}>
-                      {a.displayName ? `${a.displayName} <${a.sendAsEmail}>` : a.sendAsEmail}
-                      {a.isPrimary ? " · account" : a.isDefault ? " · default alias" : " · alias"}
+                      {a.displayName ? `${a.displayName} <${a.sendAsEmail}>` : a.sendAsEmail} · Google account
                     </option>
                   ))}
                 </optgroup>
@@ -1652,27 +1603,45 @@ function BulkFireView({
                 (no Gmail token used).
               </p>
             )}
-            {provider === "gmail" && connectedEmail && sendAsList.length === 0 && (
-              <p className="help-text" style={{ margin: '6px 0 0 0' }}>
-                Loading verified send-as addresses… If none appear, verify the alias under
-                Gmail → Settings → Accounts → “Send mail as”, then reconnect.
-              </p>
-            )}
-            {provider === "gmail" && fromAddress && connectedEmail && fromAddress !== connectedEmail && (
-              <p className="help-text" style={{ margin: '6px 0 0 0', color: 'var(--green, #2e9e5b)' }}>
-                ✓ Emails will be sent as <strong>{fromAddress}</strong> (verified Gmail alias).
-              </p>
-            )}
           </div>
           <div className="gmail-card-actions" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
-            {connectedEmail ? (
-              <button className="button ghost" onClick={handleDisconnectGmail}><X size={15} /> Disconnect account</button>
-            ) : (
-              <button className="button primary" onClick={handleConnectGmail}><Mail size={15} /> Connect Gmail account</button>
+            <button className="button primary" onClick={handleConnectGmail}><Mail size={15} /> {sendAsList.length ? "Connect another Gmail" : "Connect Gmail account"}</button>
+            {provider === "gmail" && sendAsList.some((item) => item.sendAsEmail === fromAddress) && (
+              <button className="button ghost" onClick={handleDisconnectGmail}><X size={15} /> Disconnect selected Gmail</button>
             )}
           </div>
         </div>
       </div>
+
+      {campaigns.length > 0 && (
+        <div className="panel" style={{ marginBottom: '16px' }}>
+          <div className="panel-title compact">
+            <div><p>Durable delivery</p><h2>Background Campaigns</h2></div>
+            <span className="help-text">Refreshes every 15 seconds</span>
+          </div>
+          <div className="table-shell">
+            <table className="simple-table">
+              <thead><tr><th>Campaign</th><th>Sender</th><th>Status</th><th>Progress</th><th>Scheduled / Started</th></tr></thead>
+              <tbody>
+                {campaigns.slice(0, 8).map((campaign) => (
+                  <tr key={campaign.id}>
+                    <td><strong>{campaign.name}</strong><span className="help-text">{campaign.sequence_step?.toUpperCase()}</span></td>
+                    <td>{campaign.sender_email}</td>
+                    <td><StatusBadge status={campaign.status === "completed_with_errors" ? "Follow Up" : campaign.status} /></td>
+                    <td>{campaign.sent_count || 0} sent · {campaign.failed_count || 0} failed · {campaign.total_count || 0} total</td>
+                    <td>
+                      {campaign.started_at
+                        ? `Started ${new Date(campaign.started_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })}`
+                        : `Scheduled ${new Date(campaign.scheduled_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST`}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="help-text" style={{ marginBottom: 0 }}>These campaigns run on Vercel in the background. It is safe to close the tab or turn off your laptop.</p>
+        </div>
+      )}
 
 
 
@@ -1716,12 +1685,35 @@ function BulkFireView({
                     <option value="day3">Day 3 Follow-up</option>
                     <option value="day7">Day 7 Follow-up</option>
                   </select>
+                  <select
+                    value={sendTiming}
+                    onChange={(e) => setSendTiming(e.target.value)}
+                    disabled={isStartingCampaign}
+                    aria-label="Campaign timing"
+                    style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--line-soft)', background: 'var(--surface-1)', color: 'var(--text-main)', fontSize: '14px' }}
+                  >
+                    <option value="now">Send now</option>
+                    <option value="scheduled">Schedule (IST)</option>
+                  </select>
+                  {sendTiming === "scheduled" && (
+                    <input
+                      type="datetime-local"
+                      value={scheduledLocal}
+                      min={toIstDateTimeLocal(Date.now() + 60 * 1000)}
+                      max={toIstDateTimeLocal(Date.now() + 7 * 24 * 60 * 60 * 1000)}
+                      onChange={(e) => setScheduledLocal(e.target.value)}
+                      disabled={isStartingCampaign}
+                      aria-label="Scheduled time in IST"
+                      title="India Standard Time"
+                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line-soft)', background: 'var(--surface-1)', color: 'var(--text-main)', fontSize: '14px' }}
+                    />
+                  )}
                   <button 
                     className="button primary" 
                     onClick={startBlaster} 
-                    disabled={queueStatus === "sending" || (provider === "gmail" && !connectedEmail) || (provider === "smtp" && !fromAddress)}
+                    disabled={isStartingCampaign || queueStatus === "sending" || (provider === "gmail" && !connectedEmail) || (provider === "smtp" && !fromAddress)}
                   >
-                    <Flame size={16} /> Fire Blaster Queue
+                    <Flame size={16} /> {isStartingCampaign ? "Queuing…" : sendTiming === "scheduled" ? "Schedule Campaign" : "Fire in Background"}
                   </button>
                 </div>
               )}
@@ -1907,10 +1899,7 @@ export default function App() {
   const fileRef = useRef(null);
 
   // GSI and Bulk Fire state declarations
-  const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem("googleClientId") || import.meta.env.VITE_GOOGLE_CLIENT_ID || "");
-
-  const [gmailToken, setGmailToken] = useState(() => localStorage.getItem("gmailToken") || "");
-  const [connectedEmail, setConnectedEmail] = useState(() => localStorage.getItem("connectedEmail") || "");
+  const [connectedEmail, setConnectedEmail] = useState("");
 
   // Global queue state — lives in App so it persists across view switches
   const [queueStatus, setQueueStatus] = useState("idle");
@@ -1948,18 +1937,6 @@ export default function App() {
     setQueueProgress({ current: 0, total: 0 });
     setMsRemaining(0);
   };
-
-  // Load Google Identity Services script dynamically
-  useEffect(() => {
-    const script = document.createElement("script");
-    script.src = "https://accounts.google.com/gsi/client";
-    script.async = true;
-    script.defer = true;
-    document.body.appendChild(script);
-    return () => {
-      document.body.removeChild(script);
-    };
-  }, []);
 
   useEffect(() => {
     setPage(0);
@@ -2459,13 +2436,7 @@ export default function App() {
         return <ReportsView leads={data.leads} lists={lists} />;
       case "settings":
         return (
-          <SettingsView 
-            googleClientId={googleClientId}
-            onSetGoogleClientId={(id) => {
-              setGoogleClientId(id);
-              localStorage.setItem("googleClientId", id);
-            }}
-          />
+          <SettingsView />
         );
       case "bulk-fire":
         return (
@@ -2486,12 +2457,8 @@ export default function App() {
             saveLeadRecords={saveLeadRecords}
             setSyncMessage={setSyncMessage}
             onUpdateLead={updateLead}
-            gmailToken={gmailToken}
-            setGmailToken={setGmailToken}
             connectedEmail={connectedEmail}
             setConnectedEmail={setConnectedEmail}
-            googleClientId={googleClientId}
-            setGoogleClientId={setGoogleClientId}
             onClearLeadsList={clearLeadsList}
             queueStatus={queueStatus}
             setQueueStatus={setQueueStatus}
@@ -2501,6 +2468,8 @@ export default function App() {
             setMsRemaining={setMsRemaining}
             queueRunner={queueRunner}
             setQueueRunner={setQueueRunner}
+            authToken={session?.access_token || ""}
+            notificationEmail={session?.user?.email || ""}
           />
         );
       default:

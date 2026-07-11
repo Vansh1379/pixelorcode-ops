@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { ImapFlow } from "imapflow";
+import { requireApiUser } from "../server/supabaseAdmin.js";
 
 // Vercel serverless function: sends a single email through Hostinger SMTP and
 // files a copy into the mailbox's Sent folder over IMAP (so it shows up in
@@ -109,6 +110,7 @@ export default async function handler(req, res) {
   }
 
   try {
+    await requireApiUser(req);
     const { to, subject, body, fromName, fromEmail } = req.body || {};
 
     if (!to || !to.includes("@")) {
