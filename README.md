@@ -38,6 +38,7 @@ GOOGLE_REDIRECT_URI=
 EMAIL_TOKEN_ENCRYPTION_KEY=
 OAUTH_STATE_SECRET=
 APP_ORIGIN=
+HOSTINGER_FROM_NAME=Riaan IT Consultants
 ```
 
 Do not commit `.env.local` or any service role key.

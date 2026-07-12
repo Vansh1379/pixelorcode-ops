@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { ImapFlow } from "imapflow";
 import { requireApiUser } from "../server/supabaseAdmin.js";
+import { formatMailboxFrom } from "../server/senderIdentity.js";
 
 // Vercel serverless function: sends a single email through Hostinger SMTP and
 // files a copy into the mailbox's Sent folder over IMAP (so it shows up in
@@ -125,7 +126,11 @@ export default async function handler(req, res) {
     // but keep any display name the caller asked for.
     const authUser = process.env.HOSTINGER_SMTP_USER;
     const fromAddress = fromEmail && fromEmail === authUser ? fromEmail : authUser;
-    const from = fromName ? `"${fromName}" <${fromAddress}>` : fromAddress;
+    const from = formatMailboxFrom(
+      fromAddress,
+      fromName,
+      process.env.HOSTINGER_FROM_NAME || "Riaan IT Consultants",
+    );
 
     // --- SEND (unchanged, proven path) --------------------------------------
     // This is exactly the call that is already working in production. Do NOT

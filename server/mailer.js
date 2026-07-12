@@ -1,6 +1,7 @@
 import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { ImapFlow } from "imapflow";
+import { formatMailboxFrom } from "./senderIdentity.js";
 
 let transport;
 
@@ -25,7 +26,11 @@ export async function sendSmtpMail({ to, subject, body, fromName = "" }) {
     throw new Error("Hostinger SMTP is not configured.");
   }
   const address = process.env.HOSTINGER_SMTP_USER;
-  const from = fromName ? `"${fromName.replace(/[\r\n"]/g, "")}" <${address}>` : address;
+  const from = formatMailboxFrom(
+    address,
+    fromName,
+    process.env.HOSTINGER_FROM_NAME || "Riaan IT Consultants",
+  );
   const mail = { from, to, subject, text: body };
   const info = await getTransport().sendMail(mail);
   if ((process.env.HOSTINGER_SAVE_TO_SENT || "").toLowerCase() !== "false") {

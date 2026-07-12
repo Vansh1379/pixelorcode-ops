@@ -10,6 +10,7 @@ const cryptoHelpers = await import("../server/tokenCrypto.js");
 const { sendGmailMail } = await import("../server/gmail.js");
 const templates = await import("../src/lib/fireQueue.js");
 const { normalizeScheduledAt } = await import("../server/campaignSchedule.js");
+const { formatMailboxFrom } = await import("../server/senderIdentity.js");
 
 test("encrypts refresh tokens and rejects tampering", () => {
   const encrypted = cryptoHelpers.encryptSecret("refresh-token-value");
@@ -35,6 +36,17 @@ test("extracts templates and resolves lead and sender placeholders", () => {
   assert.equal(
     templates.processSpintaxAndPlaceholders("Hi {firstname} from {company} — {senderemail}", lead, "", "sales@example.com"),
     "Hi Priya from Acme Clinic — sales@example.com",
+  );
+});
+
+test("formats the configured SMTP mailbox display name safely", () => {
+  assert.equal(
+    formatMailboxFrom("ankit@riaanitconsultants.com", "", "Riaan IT Consultants"),
+    '"Riaan IT Consultants" <ankit@riaanitconsultants.com>',
+  );
+  assert.equal(
+    formatMailboxFrom("sender@example.com", 'Bad\r\n"Name', "Fallback"),
+    '"BadName" <sender@example.com>',
   );
 });
 
