@@ -89,6 +89,6 @@ free plan, must be within the next seven days.
 5. Redeploy, connect Gmail from Bulk Fire, then start with a one-recipient test
    campaign before using a full playbook.
 
-The notification address is the signed-in PixelOrCode Ops user's email. Start
-and completion notifications are delivered through the configured Hostinger
-SMTP mailbox.
+Start and completion notifications are delivered to
+`vanshkalra1379@gmail.com` through the configured Hostinger SMTP mailbox. Set
+`CAMPAIGN_NOTIFICATION_EMAIL` to override this destination.

@@ -1,6 +1,7 @@
 import { inngest } from "../inngest/client.js";
 import { getSupabaseAdmin, requireApiUser } from "../server/supabaseAdmin.js";
 import { normalizeScheduledAt } from "../server/campaignSchedule.js";
+import { getCampaignNotificationEmail } from "../server/campaignNotification.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -18,14 +19,13 @@ export default async function handler(req, res) {
     }
 
     if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
-    const { name, sequenceStep, provider, connectionId, senderEmail, notificationEmail, recipients, scheduledAt } = req.body || {};
+    const { name, sequenceStep, provider, connectionId, senderEmail, recipients, scheduledAt } = req.body || {};
     if (!["day0", "day3", "day7"].includes(sequenceStep)) return res.status(400).json({ error: "Invalid sequence step." });
     if (!["gmail", "smtp"].includes(provider)) return res.status(400).json({ error: "Invalid sender provider." });
     if (!Array.isArray(recipients) || recipients.length < 1 || recipients.length > 250) {
       return res.status(400).json({ error: "Choose between 1 and 250 recipients." });
     }
     if (!EMAIL_RE.test(senderEmail || "")) return res.status(400).json({ error: "Invalid sender email." });
-    if (notificationEmail && !EMAIL_RE.test(notificationEmail)) return res.status(400).json({ error: "Invalid notification email." });
 
     if (provider === "gmail") {
       const { data: connection } = await admin.from("email_connections").select("id, email_address, status")
@@ -57,7 +57,7 @@ export default async function handler(req, res) {
       provider,
       connection_id: provider === "gmail" ? connectionId : null,
       sender_email: senderEmail,
-      notification_email: notificationEmail || user.email,
+      notification_email: getCampaignNotificationEmail(),
       status: "queued",
       total_count: normalized.length,
       scheduled_at: normalizedScheduledAt,

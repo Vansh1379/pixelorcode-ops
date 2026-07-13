@@ -1168,8 +1168,7 @@ function BulkFireView({
   setMsRemaining,
   queueRunner,
   setQueueRunner,
-  authToken,
-  notificationEmail
+  authToken
 }) {
   const [isParsing, setIsParsing] = useState(false);
   const [errorMsg, setErrorMsg] = useState("");
@@ -1472,7 +1471,6 @@ function BulkFireView({
           provider,
           connectionId: connection?.connectionId || null,
           senderEmail: fromAddress,
-          notificationEmail,
           scheduledAt: sendTiming === "scheduled"
             ? new Date(`${scheduledLocal}:00+05:30`).toISOString()
             : new Date().toISOString(),
@@ -2469,7 +2467,6 @@ export default function App() {
             queueRunner={queueRunner}
             setQueueRunner={setQueueRunner}
             authToken={session?.access_token || ""}
-            notificationEmail={session?.user?.email || ""}
           />
         );
       default:

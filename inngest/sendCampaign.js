@@ -2,6 +2,7 @@ import { inngest } from "./client.js";
 import { getSupabaseAdmin } from "../server/supabaseAdmin.js";
 import { sendGmailMail } from "../server/gmail.js";
 import { sendCampaignNotification, sendSmtpMail } from "../server/mailer.js";
+import { getCampaignNotificationEmail } from "../server/campaignNotification.js";
 
 async function loadCampaign(campaignId) {
   const admin = getSupabaseAdmin();
@@ -43,7 +44,7 @@ export const sendCampaign = inngest.createFunction(
       }).eq("id", campaignId);
       if (error) throw error;
       await sendCampaignNotification({
-        to: current.notification_email,
+        to: getCampaignNotificationEmail(),
         subject: `Campaign started — ${current.name}`,
         body: [
           `Your ${current.sequence_step.toUpperCase()} campaign has started in the background.`,
@@ -151,7 +152,7 @@ export const sendCampaign = inngest.createFunction(
         status, completed_at: completedAt, updated_at: completedAt,
       }).eq("id", campaignId);
       await sendCampaignNotification({
-        to: campaign.notification_email,
+        to: getCampaignNotificationEmail(),
         subject: `Campaign completed — ${counts.sent} sent, ${counts.failed} failed`,
         body: [
           `Campaign: ${campaign.name}`,

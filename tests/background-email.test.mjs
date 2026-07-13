@@ -11,6 +11,7 @@ const { sendGmailMail } = await import("../server/gmail.js");
 const templates = await import("../src/lib/fireQueue.js");
 const { normalizeScheduledAt } = await import("../server/campaignSchedule.js");
 const { formatMailboxFrom } = await import("../server/senderIdentity.js");
+const { getCampaignNotificationEmail } = await import("../server/campaignNotification.js");
 
 test("encrypts refresh tokens and rejects tampering", () => {
   const encrypted = cryptoHelpers.encryptSecret("refresh-token-value");
@@ -48,6 +49,16 @@ test("formats the configured SMTP mailbox display name safely", () => {
     formatMailboxFrom("sender@example.com", 'Bad\r\n"Name', "Fallback"),
     '"BadName" <sender@example.com>',
   );
+});
+
+test("uses Vansh's inbox for campaign lifecycle notifications", () => {
+  const original = process.env.CAMPAIGN_NOTIFICATION_EMAIL;
+  delete process.env.CAMPAIGN_NOTIFICATION_EMAIL;
+  assert.equal(getCampaignNotificationEmail(), "vanshkalra1379@gmail.com");
+  process.env.CAMPAIGN_NOTIFICATION_EMAIL = "alerts@example.com";
+  assert.equal(getCampaignNotificationEmail(), "alerts@example.com");
+  if (original == null) delete process.env.CAMPAIGN_NOTIFICATION_EMAIL;
+  else process.env.CAMPAIGN_NOTIFICATION_EMAIL = original;
 });
 
 test("refreshes offline Gmail access and sends the expected MIME message", async () => {
