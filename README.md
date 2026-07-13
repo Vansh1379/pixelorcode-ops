@@ -76,10 +76,14 @@ Bulk Fire supports both immediate background campaigns and one-off scheduled
 campaigns. Scheduled times are entered in India Standard Time and, on Inngest's
 free plan, must be within the next seven days.
 
+Day 3 follows up on Day 0 in the same email thread. Day 7 replies to Day 3 when
+available and otherwise falls back to Day 0. This works for both Hostinger SMTP
+and connected Gmail senders when the sender and recipient addresses match.
+
 ## Background email setup
 
-1. Run `supabase/migrations/202607110001_background_email_campaigns.sql` in
-   the Supabase SQL editor.
+1. Apply the Supabase migrations in order, including
+   `202607130001_email_threading.sql` for Day 3/Day 7 reply threading.
 2. Create a Google OAuth 2.0 Web application and add the production callback
    shown above. Configure the OAuth consent screen with `gmail.send`, `openid`,
    `email`, and `profile`.

@@ -2,6 +2,7 @@ import nodemailer from "nodemailer";
 import MailComposer from "nodemailer/lib/mail-composer/index.js";
 import { ImapFlow } from "imapflow";
 import { formatMailboxFrom } from "./senderIdentity.js";
+import { createRfcMessageId, normalizeMessageId } from "./emailThreading.js";
 
 let transport;
 
@@ -21,7 +22,7 @@ function getTransport() {
   return transport;
 }
 
-export async function sendSmtpMail({ to, subject, body, fromName = "" }) {
+export async function sendSmtpMail({ to, subject, body, fromName = "", replyTo = null }) {
   if (!process.env.HOSTINGER_SMTP_USER || !process.env.HOSTINGER_SMTP_PASS) {
     throw new Error("Hostinger SMTP is not configured.");
   }
@@ -31,7 +32,16 @@ export async function sendSmtpMail({ to, subject, body, fromName = "" }) {
     fromName,
     process.env.HOSTINGER_FROM_NAME || "Riaan IT Consultants",
   );
-  const mail = { from, to, subject, text: body };
+  const messageId = createRfcMessageId(address);
+  const inReplyTo = normalizeMessageId(replyTo?.rfcMessageId || replyTo?.providerMessageId);
+  const mail = {
+    from,
+    to,
+    subject,
+    text: body,
+    messageId,
+    ...(inReplyTo ? { inReplyTo, references: inReplyTo } : {}),
+  };
   const info = await getTransport().sendMail(mail);
   if ((process.env.HOSTINGER_SAVE_TO_SENT || "").toLowerCase() !== "false") {
     try {
@@ -56,7 +66,7 @@ export async function sendSmtpMail({ to, subject, body, fromName = "" }) {
       console.error("Failed to save background email to Sent", error);
     }
   }
-  return { messageId: info.messageId || "" };
+  return { messageId: info.messageId || messageId, rfcMessageId: info.messageId || messageId, threadId: "" };
 }
 
 export async function sendCampaignNotification({ to, subject, body }) {

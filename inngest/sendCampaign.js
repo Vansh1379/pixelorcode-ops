@@ -3,6 +3,7 @@ import { getSupabaseAdmin } from "../server/supabaseAdmin.js";
 import { sendGmailMail } from "../server/gmail.js";
 import { sendCampaignNotification, sendSmtpMail } from "../server/mailer.js";
 import { getCampaignNotificationEmail } from "../server/campaignNotification.js";
+import { makeThreadedSubject, previousSequenceSteps } from "../server/emailThreading.js";
 
 async function loadCampaign(campaignId) {
   const admin = getSupabaseAdmin();
@@ -25,6 +26,46 @@ async function refreshCounts(campaignId) {
     updated_at: new Date().toISOString(),
   }).eq("id", campaignId);
   return counts;
+}
+
+async function findPreviousMessage(campaign, recipient) {
+  const steps = previousSequenceSteps(campaign.sequence_step);
+  if (!steps.length) return null;
+  const admin = getSupabaseAdmin();
+
+  // Day 7 prefers Day 3, then falls back to Day 0. Day 3 only replies to Day 0.
+  for (const sequenceStep of steps) {
+    const { data: campaigns, error: campaignError } = await admin.from("email_campaigns")
+      .select("id")
+      .eq("user_id", campaign.user_id)
+      .eq("provider", campaign.provider)
+      .eq("sender_email", campaign.sender_email)
+      .eq("sequence_step", sequenceStep)
+      .order("created_at", { ascending: false })
+      .limit(30);
+    if (campaignError) throw campaignError;
+    const campaignIds = (campaigns || []).map((item) => item.id);
+    if (!campaignIds.length) continue;
+
+    const { data: previous, error: recipientError } = await admin.from("email_campaign_recipients")
+      .select("provider_message_id, provider_thread_id, rfc_message_id, resolved_subject, sent_at")
+      .in("campaign_id", campaignIds)
+      .eq("recipient_email", recipient.recipient_email)
+      .eq("status", "sent")
+      .order("sent_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (recipientError) throw recipientError;
+    if (previous) {
+      return {
+        providerMessageId: previous.provider_message_id || "",
+        threadId: previous.provider_thread_id || "",
+        rfcMessageId: previous.rfc_message_id || "",
+        subject: previous.resolved_subject || "",
+      };
+    }
+  }
+  return null;
 }
 
 export const sendCampaign = inngest.createFunction(
@@ -89,6 +130,13 @@ export const sendCampaign = inngest.createFunction(
         }).eq("id", current.id);
 
         try {
+          const replyTo = await findPreviousMessage(campaign, current);
+          if (campaign.sequence_step !== "day0" && !replyTo) {
+            throw new Error(`No earlier sent email was found for ${current.recipient_email} from ${campaign.sender_email}; follow-up was not sent as a new thread.`);
+          }
+          const subject = replyTo
+            ? makeThreadedSubject(replyTo.subject, current.resolved_subject)
+            : current.resolved_subject;
           let result;
           if (campaign.provider === "gmail") {
             const { data: connection, error } = await admin.from("email_connections")
@@ -99,23 +147,27 @@ export const sendCampaign = inngest.createFunction(
             result = await sendGmailMail({
               connection,
               to: current.recipient_email,
-              subject: current.resolved_subject,
+              subject,
               body: current.resolved_body,
               senderEmail: campaign.sender_email,
+              replyTo,
             });
             await admin.from("email_connections").update({ last_used_at: new Date().toISOString() })
               .eq("id", connection.id);
           } else {
             result = await sendSmtpMail({
               to: current.recipient_email,
-              subject: current.resolved_subject,
+              subject,
               body: current.resolved_body,
+              replyTo,
             });
           }
 
           const sentAt = new Date().toISOString();
           await admin.from("email_campaign_recipients").update({
             status: "sent", provider_message_id: result.messageId,
+            provider_thread_id: result.threadId || null,
+            rfc_message_id: result.rfcMessageId || null,
             sent_at: sentAt, updated_at: sentAt,
           }).eq("id", current.id);
           if (current.lead_id) {

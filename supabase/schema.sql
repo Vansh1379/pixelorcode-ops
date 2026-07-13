@@ -104,6 +104,8 @@ create table if not exists public.email_campaign_recipients (
   status text not null default 'pending' check (status in ('pending', 'sending', 'sent', 'failed', 'skipped', 'cancelled')),
   attempt_count integer not null default 0,
   provider_message_id text,
+  provider_thread_id text,
+  rfc_message_id text,
   error_message text,
   sent_at timestamptz,
   created_at timestamptz not null default now(),

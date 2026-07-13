@@ -12,6 +12,7 @@ const templates = await import("../src/lib/fireQueue.js");
 const { normalizeScheduledAt } = await import("../server/campaignSchedule.js");
 const { formatMailboxFrom } = await import("../server/senderIdentity.js");
 const { getCampaignNotificationEmail } = await import("../server/campaignNotification.js");
+const { makeThreadedSubject, normalizeMessageId, previousSequenceSteps } = await import("../server/emailThreading.js");
 
 test("encrypts refresh tokens and rejects tampering", () => {
   const encrypted = cryptoHelpers.encryptSecret("refresh-token-value");
@@ -61,6 +62,14 @@ test("uses Vansh's inbox for campaign lifecycle notifications", () => {
   else process.env.CAMPAIGN_NOTIFICATION_EMAIL = original;
 });
 
+test("builds stable follow-up thread metadata", () => {
+  assert.equal(normalizeMessageId("original@example.com"), "<original@example.com>");
+  assert.equal(makeThreadedSubject("Re: Original proposal", "Different follow-up"), "Re: Original proposal");
+  assert.deepEqual(previousSequenceSteps("day3"), ["day0"]);
+  assert.deepEqual(previousSequenceSteps("day7"), ["day3", "day0"]);
+  assert.deepEqual(previousSequenceSteps("day0"), []);
+});
+
 test("refreshes offline Gmail access and sends the expected MIME message", async () => {
   const originalFetch = globalThis.fetch;
   const calls = [];
@@ -71,7 +80,7 @@ test("refreshes offline Gmail access and sends the expected MIME message", async
         status: 200, headers: { "Content-Type": "application/json" },
       });
     }
-    return new Response(JSON.stringify({ id: "gmail-message-123" }), {
+    return new Response(JSON.stringify({ id: "gmail-message-123", threadId: "gmail-thread-123" }), {
       status: 200, headers: { "Content-Type": "application/json" },
     });
   };
@@ -85,6 +94,7 @@ test("refreshes offline Gmail access and sends the expected MIME message", async
       senderEmail: "sender@gmail.com",
     });
     assert.equal(result.messageId, "gmail-message-123");
+    assert.equal(result.threadId, "gmail-thread-123");
     assert.equal(calls.length, 2);
     assert.match(String(calls[0].options.body), /refresh_token=stored-refresh-token/);
     assert.equal(calls[1].options.headers.Authorization, "Bearer fresh-access-token");
@@ -93,6 +103,49 @@ test("refreshes offline Gmail access and sends the expected MIME message", async
     assert.match(decoded, /From: sender@gmail.com/);
     assert.match(decoded, /To: lead@example.com/);
     assert.match(decoded, /Test body/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test("sends Gmail follow-ups inside the previous provider thread", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push({ url: String(url), options });
+    if (String(url).includes("oauth2.googleapis.com/token")) {
+      return new Response(JSON.stringify({ access_token: "fresh-access-token" }), {
+        status: 200, headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (String(url).includes("/messages/prior-gmail-id?")) {
+      return new Response(JSON.stringify({
+        id: "prior-gmail-id",
+        threadId: "existing-thread-id",
+        payload: { headers: [{ name: "Message-ID", value: "<original@example.com>" }] },
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }
+    return new Response(JSON.stringify({ id: "follow-up-id", threadId: "existing-thread-id" }), {
+      status: 200, headers: { "Content-Type": "application/json" },
+    });
+  };
+
+  try {
+    const result = await sendGmailMail({
+      connection: { encrypted_refresh_token: cryptoHelpers.encryptSecret("stored-refresh-token") },
+      to: "lead@example.com",
+      subject: "Re: Original proposal",
+      body: "Following up",
+      senderEmail: "sender@gmail.com",
+      replyTo: { providerMessageId: "prior-gmail-id" },
+    });
+    assert.equal(result.threadId, "existing-thread-id");
+    assert.equal(calls.length, 3);
+    const request = JSON.parse(calls[2].options.body);
+    assert.equal(request.threadId, "existing-thread-id");
+    const decoded = Buffer.from(request.raw, "base64url").toString("utf8");
+    assert.match(decoded, /In-Reply-To: <original@example.com>/);
+    assert.match(decoded, /References: <original@example.com>/);
   } finally {
     globalThis.fetch = originalFetch;
   }
