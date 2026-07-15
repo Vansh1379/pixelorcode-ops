@@ -1504,7 +1504,7 @@ function BulkFireView({
     <div className="bulk-fire-container">
       <div className="bulk-fire-header-panel">
         {/* Upload Panel */}
-        <div className="panel">
+        <div className="panel upload-panel">
           <div className="panel-title compact">
             <div>
               <p>Outreach playbook</p>
@@ -1519,68 +1519,48 @@ function BulkFireView({
             onChange={handleFileUpload} 
             hidden 
           />
-          <div className="uploader-box" onClick={() => fileInputRef.current?.click()}>
-            <Flame size={40} className="muted" />
-            <p>{isParsing ? "Extracting playbook data..." : "Click to choose .docx lead playbook"}</p>
-            <span>Will automatically parse, match emails & templates, and save to DB.</span>
+          <div className="uploader-box" role="button" tabIndex={0} onClick={() => fileInputRef.current?.click()} onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileInputRef.current?.click(); } }}>
+            <div className="uploader-icon-ring">
+              <Flame size={28} />
+            </div>
+            <p>{isParsing ? "Extracting playbook data..." : "Click to upload .docx playbook"}</p>
+            <span>Auto-parses leads, matches emails & templates, saves to DB</span>
           </div>
-          {errorMsg && <p className="auth-message error" style={{ color: 'var(--red)', marginTop: '10px' }}>{errorMsg}</p>}
+          {errorMsg && <p className="auth-message error bulk-fire-error">{errorMsg}</p>}
         </div>
 
         {/* Gmail Card */}
-        <div className="gmail-card">
+        <div className={`gmail-card ${sendAsList.length ? 'gmail-connected' : ''}`}>
           <div className="gmail-card-status">
             <div className={`gmail-dot ${sendAsList.length ? 'connected' : 'disconnected'}`}></div>
             <div className="gmail-card-details">
-              <h3>Gmail Integration</h3>
+              <h3>{sendAsList.length ? 'Gmail Connected' : 'Gmail Integration'}</h3>
               <p>{sendAsList.length ? `${sendAsList.length} Gmail account${sendAsList.length === 1 ? "" : "s"} connected` : "No Gmail account connected"}</p>
             </div>
           </div>
-          <p className="help-text" style={{ margin: 0 }}>
+          <p className="help-text gmail-card-desc">
             {provider === "smtp"
               ? "Background campaigns are relayed through Hostinger SMTP by Vercel and Inngest."
               : "Gmail is connected for offline sending, so campaigns continue after this browser closes."}
           </p>
           {provider === "gmail" && sendAsList.length === 0 && (
-            <div style={{
-              display: 'flex',
-              alignItems: 'flex-start',
-              gap: '8px',
-              padding: '10px 12px',
-              marginTop: '10px',
-              background: 'color-mix(in srgb, var(--red) 12%, transparent)',
-              border: '1px solid color-mix(in srgb, var(--red) 35%, transparent)',
-              borderRadius: '6px',
-              fontSize: '13px',
-              color: 'var(--red)',
-              lineHeight: '1.5'
-            }}>
-              <span style={{ flexShrink: 0, marginTop: '1px' }}>⚠️</span>
+            <div className="gmail-warning-box">
+              <span>⚠️</span>
               <span>
                 <strong>Gmail account not connected.</strong> Connect Gmail to send via the
                 API, or pick the Hostinger SMTP sender below (no Gmail needed).
               </span>
             </div>
           )}
-          <div style={{ marginTop: '12px' }}>
-            <label className="help-text" style={{ display: 'block', marginBottom: '6px', fontWeight: 600 }}>
+          <div className="gmail-sender-group">
+            <label className="help-text gmail-sender-label">
               Send emails from
             </label>
             <select
               value={`${provider}:${fromAddress}`}
               onChange={(e) => handleSelectFromAddress(e.target.value)}
               disabled={queueStatus === "sending"}
-              style={{
-                width: '100%',
-                padding: '8px 12px',
-                borderRadius: '6px',
-                border: '1px solid var(--line-soft)',
-                background: 'var(--surface-1)',
-                color: 'var(--text-main)',
-                fontSize: '14px',
-                cursor: 'pointer',
-                outline: 'none',
-              }}
+              className="gmail-sender-select"
             >
               {connectedEmail && sendAsList.length > 0 && (
                 <optgroup label="Gmail API">
@@ -1596,13 +1576,13 @@ function BulkFireView({
               </optgroup>
             </select>
             {provider === "smtp" && (
-              <p className="help-text" style={{ margin: '6px 0 0 0', color: 'var(--green, #2e9e5b)' }}>
+              <p className="help-text gmail-smtp-confirm">
                 ✓ Emails send directly from <strong>{fromAddress}</strong> via Hostinger SMTP
                 (no Gmail token used).
               </p>
             )}
           </div>
-          <div className="gmail-card-actions" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
+          <div className="gmail-card-actions">
             <button className="button primary" onClick={handleConnectGmail}><Mail size={15} /> {sendAsList.length ? "Connect another Gmail" : "Connect Gmail account"}</button>
             {provider === "gmail" && sendAsList.some((item) => item.sendAsEmail === fromAddress) && (
               <button className="button ghost" onClick={handleDisconnectGmail}><X size={15} /> Disconnect selected Gmail</button>
@@ -1611,8 +1591,18 @@ function BulkFireView({
         </div>
       </div>
 
+      {leadsList.length === 0 && campaigns.length === 0 && (
+        <div className="bulk-fire-empty">
+          <div className="empty-icon-ring">
+            <Flame size={32} />
+          </div>
+          <p>No playbook loaded yet</p>
+          <span>Upload a .docx outreach playbook above to get started — leads will be parsed, templates matched, and everything saved automatically.</span>
+        </div>
+      )}
+
       {campaigns.length > 0 && (
-        <div className="panel" style={{ marginBottom: '16px' }}>
+        <div className="panel campaigns-panel">
           <div className="panel-title compact">
             <div><p>Durable delivery</p><h2>Background Campaigns</h2></div>
             <span className="help-text">Refreshes every 15 seconds</span>
@@ -1637,7 +1627,7 @@ function BulkFireView({
               </tbody>
             </table>
           </div>
-          <p className="help-text" style={{ marginBottom: 0 }}>These campaigns run on Vercel in the background. It is safe to close the tab or turn off your laptop.</p>
+          <p className="help-text campaigns-help">These campaigns run on Vercel in the background. It is safe to close the tab or turn off your laptop.</p>
         </div>
       )}
 
@@ -1645,13 +1635,13 @@ function BulkFireView({
 
       {/* Main Review Panel */}
       {leadsList.length > 0 && (
-        <div className="panel" style={{ flexGrow: 1 }}>
-          <div className="panel-title" style={{ justifyContent: 'space-between' }}>
+        <div className="panel leads-panel">
+          <div className="panel-title leads-panel-header">
             <div>
               <p>Review Leads</p>
               <h2>Playbook Leads List</h2>
             </div>
-            <div style={{ display: 'flex', gap: '8px' }}>
+            <div className="leads-toolbar">
               <button 
                 type="button"
                 className="button ghost danger"
@@ -1661,22 +1651,11 @@ function BulkFireView({
                 <Trash2 size={15} /> Clear Playbook
               </button>
               {filterTab === "email" && (
-                <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <div className="leads-toolbar-controls">
                   <select
                     value={selectedStep}
                     onChange={(e) => setSelectedStep(e.target.value)}
-                    style={{
-                      padding: '8px 12px',
-                      borderRadius: '6px',
-                      border: '1px solid var(--line-soft)',
-                      background: 'var(--surface-1)',
-                      color: 'var(--text-main)',
-                      fontSize: '14px',
-                      fontWeight: '500',
-                      cursor: 'pointer',
-                      outline: 'none',
-                      boxShadow: 'var(--shadow-sm)'
-                    }}
+                    className="bulk-fire-select step-select"
                     disabled={queueStatus === "sending"}
                   >
                     <option value="day0">Day 0 Opener</option>
@@ -1688,7 +1667,7 @@ function BulkFireView({
                     onChange={(e) => setSendTiming(e.target.value)}
                     disabled={isStartingCampaign}
                     aria-label="Campaign timing"
-                    style={{ padding: '8px 12px', borderRadius: '6px', border: '1px solid var(--line-soft)', background: 'var(--surface-1)', color: 'var(--text-main)', fontSize: '14px' }}
+                    className="bulk-fire-select"
                   >
                     <option value="now">Send now</option>
                     <option value="scheduled">Schedule (IST)</option>
@@ -1703,7 +1682,7 @@ function BulkFireView({
                       disabled={isStartingCampaign}
                       aria-label="Scheduled time in IST"
                       title="India Standard Time"
-                      style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid var(--line-soft)', background: 'var(--surface-1)', color: 'var(--text-main)', fontSize: '14px' }}
+                      className="schedule-input"
                     />
                   )}
                   <button 
@@ -1724,11 +1703,11 @@ function BulkFireView({
             <button className={`filter-tab ${filterTab === "all" ? "active" : ""}`} onClick={() => setFilterTab("all")}>All Parsed ({leadsList.length})</button>
           </div>
 
-          <div className="table-shell" style={{ maxHeight: '350px', overflowY: 'auto', marginTop: '16px' }}>
+          <div className="table-shell leads-table-scroll">
             <table className="simple-table">
               <thead>
                 <tr>
-                  <th style={{ width: '40px' }}>
+                  <th className="col-checkbox">
                     {filterTab === "email" && (
                       <input 
                         type="checkbox" 
@@ -1764,7 +1743,7 @@ function BulkFireView({
                       {lead.routeType === "Email" ? (
                         <a href={`mailto:${lead.email}`}>{lead.email}</a>
                       ) : (
-                        <span className="help-text" style={{ fontStyle: 'italic' }}>{lead.routeNotes || "No address details"}</span>
+                        <span className="help-text route-manual-text">{lead.routeNotes || "No address details"}</span>
                       )}
                     </td>
                     <td>
@@ -1784,12 +1763,12 @@ function BulkFireView({
                     <td>
                       <StatusBadge status={lead.status} />
                       {lead.status === "Email Sent" && lead.lastAction && (
-                        <div style={{ color: 'var(--text-muted)', fontSize: '11px', marginTop: '6px' }}>
+                        <div className="sent-detail">
                           {lead.lastAction.split(' · ')[0]}
                         </div>
                       )}
                       {lead.status === "Bounced" && lead.lastAction && lead.lastAction.includes("Email failed:") && (
-                        <div style={{ color: 'var(--red)', fontSize: '11px', marginTop: '6px', maxWidth: '180px', lineBreak: 'anywhere' }} title={lead.lastAction.split(' · ')[0]}>
+                        <div className="bounce-detail" title={lead.lastAction.split(' · ')[0]}>
                           {lead.lastAction.split(' · ')[0].replace("Email failed: ", "")}
                         </div>
                       )}
@@ -1800,6 +1779,16 @@ function BulkFireView({
             </table>
           </div>
 
+          {logs.length > 0 && (
+            <div className="console-panel bulk-fire-console">
+              {logs.map((line, i) => (
+                <div key={i} className={`console-line ${line.startsWith('[Error]') ? 'error' : line.startsWith('[Background]') ? 'success' : 'info'}`}>
+                  {line}
+                </div>
+              ))}
+              <div ref={consoleEndRef} />
+            </div>
+          )}
 
         </div>
       )}
@@ -1807,7 +1796,7 @@ function BulkFireView({
       {/* Message Preview Modal */}
       {previewLead && (
         <div className="modal-backdrop">
-          <div className="modal" style={{ width: 'min(640px, 100%)' }}>
+          <div className="modal preview-modal">
             <div className="modal-head">
               <div>
                 <p>Email Template Preview</p>
@@ -1816,42 +1805,42 @@ function BulkFireView({
               <button type="button" className="icon-button" onClick={() => setPreviewLead(null)}><X size={18} /></button>
             </div>
             
-            <div className="modal-content" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div className="modal-content preview-modal-content">
               {(() => {
                 const tpl = previewLead.templates || getOutreachTemplates(previewLead.notes) || {};
                 return (
                   <>
-                    <div>
+                    <div className={selectedStep === "day0" ? "template-active" : ""}>
                       <strong>Day 0 Opener</strong>
-                      <div style={{ border: '1px solid var(--line-soft)', padding: '12px', borderRadius: '4px', background: 'var(--surface-2)', marginTop: '8px' }}>
-                        <p style={{ margin: '0 0 8px 0', borderBottom: '1px solid var(--line-soft)', paddingBottom: '8px' }}>
+                      <div className="template-preview-box">
+                        <p className="template-subject">
                           <strong>Subject:</strong> {tpl.day0?.subject || `Concept proposal for ${previewLead.name}`}
                         </p>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px' }}>
+                        <pre className="template-body">
                           {tpl.day0?.body || "—"}
                         </pre>
                       </div>
                     </div>
 
-                    <div>
+                    <div className={selectedStep === "day3" ? "template-active" : ""}>
                       <strong>Day 3 Follow-up</strong>
-                      <div style={{ border: '1px solid var(--line-soft)', padding: '12px', borderRadius: '4px', background: 'var(--surface-2)', marginTop: '8px' }}>
-                        <p style={{ margin: '0 0 8px 0', borderBottom: '1px solid var(--line-soft)', paddingBottom: '8px' }}>
+                      <div className="template-preview-box">
+                        <p className="template-subject">
                           <strong>Subject:</strong> {tpl.day3?.subject || "—"}
                         </p>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px' }}>
+                        <pre className="template-body">
                           {tpl.day3?.body || "—"}
                         </pre>
                       </div>
                     </div>
 
-                    <div>
+                    <div className={selectedStep === "day7" ? "template-active" : ""}>
                       <strong>Day 7 Follow-up</strong>
-                      <div style={{ border: '1px solid var(--line-soft)', padding: '12px', borderRadius: '4px', background: 'var(--surface-2)', marginTop: '8px' }}>
-                        <p style={{ margin: '0 0 8px 0', borderBottom: '1px solid var(--line-soft)', paddingBottom: '8px' }}>
+                      <div className="template-preview-box">
+                        <p className="template-subject">
                           <strong>Subject:</strong> {tpl.day7?.subject || "—"}
                         </p>
-                        <pre style={{ margin: 0, whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '13px' }}>
+                        <pre className="template-body">
                           {tpl.day7?.body || "—"}
                         </pre>
                       </div>
