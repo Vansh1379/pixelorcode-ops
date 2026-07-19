@@ -1207,6 +1207,9 @@ function BulkFireView({
   const [selectedLeadIds, setSelectedLeadIds] = useState(new Set());
   const [filterTab, setFilterTab] = useState("email"); // 'all', 'email', 'manual'
   const [selectedStep, setSelectedStep] = useState("day0"); // 'day0', 'day3', 'day7'
+  // When on, firing Day 0 also auto-schedules Day 3 (+3d) and Day 7 (+7d), and a
+  // lead that replies is dropped from the remaining follow-ups.
+  const [autoFollowUps, setAutoFollowUps] = useState(true);
   
   const [logs, setLogs] = useState([]);
   const [previewLead, setPreviewLead] = useState(null);
@@ -1457,21 +1460,41 @@ function BulkFireView({
       }
     }
     
-    const resolveMessage = (lead) => {
+    // Resolve one step's subject/body for a lead (spintax + placeholders applied).
+    const resolveStep = (lead, step) => {
       const templates = getOutreachTemplates(lead.notes) || lead.templates || {};
-      const selected = templates[selectedStep] || {};
-      const fallback = selectedStep === "day3"
+      const selected = templates[step] || {};
+      const fallback = step === "day3"
         ? { subject: `Follow-up on proposal for ${lead.name}`, body: `Hi, just following up on our previous email regarding ${lead.name}.` }
-        : selectedStep === "day7"
+        : step === "day7"
           ? { subject: `Final follow-up for ${lead.name}`, body: `Hi, wanted to reach out one last time regarding ${lead.name}.` }
           : { subject: `Concept proposal for ${lead.name}`, body: `Hi, we sketched a mock concept for ${lead.name}. Open to taking a look?` };
       return {
-        leadId: lead.id,
-        leadName: lead.name,
-        email: lead.email,
         subject: processSpintaxAndPlaceholders(selected.subject || fallback.subject, lead, "", fromAddress),
         body: processSpintaxAndPlaceholders(selected.body || fallback.body, lead, "", fromAddress),
       };
+    };
+
+    // Auto follow-ups always start at Day 0 and carry the resolved Day 3/Day 7
+    // messages so the server can spawn those campaigns later.
+    const effectiveStep = autoFollowUps ? "day0" : selectedStep;
+    const buildRecipient = (lead) => {
+      const primary = resolveStep(lead, effectiveStep);
+      const recipient = {
+        leadId: lead.id,
+        leadName: lead.name,
+        email: lead.email,
+        subject: primary.subject,
+        body: primary.body,
+      };
+      if (autoFollowUps) {
+        recipient.sequenceMessages = {
+          day0: resolveStep(lead, "day0"),
+          day3: resolveStep(lead, "day3"),
+          day7: resolveStep(lead, "day7"),
+        };
+      }
+      return recipient;
     };
 
     const connection = sendAsList.find((item) => item.sendAsEmail === fromAddress);
@@ -1492,21 +1515,25 @@ function BulkFireView({
       const result = await apiRequest("/api/campaigns", {
         method: "POST",
         body: JSON.stringify({
-          name: `${listLabel} · ${selectedStep.toUpperCase()} · ${new Date().toLocaleString("en-IN")}`,
-          sequenceStep: selectedStep,
+          name: `${listLabel} · ${effectiveStep.toUpperCase()} · ${new Date().toLocaleString("en-IN")}`,
+          sequenceStep: effectiveStep,
+          autoFollowUps,
           provider,
           connectionId: connection?.connectionId || null,
           senderEmail: fromAddress,
           scheduledAt: sendTiming === "scheduled"
             ? new Date(`${scheduledLocal}:00+05:30`).toISOString()
             : new Date().toISOString(),
-          recipients: leadsToFire.map(resolveMessage),
+          recipients: leadsToFire.map(buildRecipient),
         }),
       });
       const timingLabel = sendTiming === "scheduled"
         ? `scheduled for ${new Date(`${scheduledLocal}:00+05:30`).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST`
         : "queued to start now";
       setLogs(prev => [...prev, `[Background] Campaign ${timingLabel} with ${leadsToFire.length} recipients. You may close this tab or turn off your laptop.`]);
+      if (autoFollowUps) {
+        setLogs(prev => [...prev, `[Sequence] Day 3 (+3d) and Day 7 (+7d) follow-ups will fire automatically. Leads that reply are dropped from follow-ups.${provider === "gmail" ? " Note: reply detection only works for the SMTP mailbox, not Gmail." : ""}`]);
+      }
       setCampaigns(prev => [result.campaign, ...prev]);
       setSelectedLeadIds(new Set());
       setSyncMessage("Background campaign queued successfully");
@@ -1688,8 +1715,20 @@ function BulkFireView({
               </button>
               {filterTab === "email" && (
                 <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <label
+                    title="Fire Day 0 now, then auto-send Day 3 (+3 days) and Day 7 (+7 days). Leads who reply are dropped from the follow-ups."
+                    style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '14px', fontWeight: '500', color: 'var(--text-main)', cursor: 'pointer', whiteSpace: 'nowrap' }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={autoFollowUps}
+                      onChange={(e) => setAutoFollowUps(e.target.checked)}
+                      disabled={isStartingCampaign || queueStatus === "sending"}
+                    />
+                    Auto Day 3 &amp; Day 7 follow-ups
+                  </label>
                   <select
-                    value={selectedStep}
+                    value={autoFollowUps ? "day0" : selectedStep}
                     onChange={(e) => setSelectedStep(e.target.value)}
                     style={{
                       padding: '8px 12px',
@@ -1699,13 +1738,15 @@ function BulkFireView({
                       color: 'var(--text-main)',
                       fontSize: '14px',
                       fontWeight: '500',
-                      cursor: 'pointer',
+                      cursor: autoFollowUps ? 'not-allowed' : 'pointer',
                       outline: 'none',
-                      boxShadow: 'var(--shadow-sm)'
+                      boxShadow: 'var(--shadow-sm)',
+                      opacity: autoFollowUps ? 0.6 : 1
                     }}
-                    disabled={queueStatus === "sending"}
+                    disabled={autoFollowUps || queueStatus === "sending"}
+                    title={autoFollowUps ? "Auto-sequence always starts at Day 0" : undefined}
                   >
-                    <option value="day0">Day 0 Opener</option>
+                    <option value="day0">{autoFollowUps ? "Day 0 → 3 → 7 (auto)" : "Day 0 Opener"}</option>
                     <option value="day3">Day 3 Follow-up</option>
                     <option value="day7">Day 7 Follow-up</option>
                   </select>

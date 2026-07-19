@@ -30,6 +30,7 @@ create table if not exists public.leads (
   next_follow_up date,
   proposal_status text not null default 'None',
   client_value text,
+  email_replied boolean not null default false,
   created_at date default current_date,
   updated_at date default current_date
 );
@@ -86,6 +87,10 @@ create table if not exists public.email_campaigns (
   sent_count integer not null default 0,
   failed_count integer not null default 0,
   skipped_count integer not null default 0,
+  sequence_group_id uuid,
+  auto_follow_ups boolean not null default false,
+  sequence_anchor_at timestamptz,
+  parent_campaign_id uuid references public.email_campaigns(id) on delete set null,
   scheduled_at timestamptz not null default now(),
   started_at timestamptz,
   completed_at timestamptz,
@@ -107,6 +112,8 @@ create table if not exists public.email_campaign_recipients (
   provider_thread_id text,
   rfc_message_id text,
   error_message text,
+  replied_at timestamptz,
+  sequence_messages jsonb,
   sent_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
@@ -120,6 +127,8 @@ create index if not exists proposals_client_idx on public.proposals(client);
 create index if not exists email_connections_user_idx on public.email_connections(user_id);
 create index if not exists email_campaigns_user_created_idx on public.email_campaigns(user_id, created_at desc);
 create index if not exists email_campaign_recipients_campaign_idx on public.email_campaign_recipients(campaign_id);
+create index if not exists email_campaigns_sequence_group_idx on public.email_campaigns(sequence_group_id);
+create index if not exists email_campaign_recipients_reply_lookup_idx on public.email_campaign_recipients(recipient_email, replied_at);
 
 insert into storage.buckets (id, name, public)
 values ('proposal-pdfs', 'proposal-pdfs', false)
