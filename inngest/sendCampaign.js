@@ -89,6 +89,7 @@ export const sendCampaign = inngest.createFunction(
         subject: `Campaign started — ${current.name}`,
         body: [
           `Your ${current.sequence_step.toUpperCase()} campaign has started in the background.`,
+          `Campaign: ${current.name}`,
           `Sender: ${current.sender_email}`,
           `Recipients: ${current.total_count}`,
           `Started: ${new Date(startedAt).toLocaleString("en-IN", { timeZone: "Asia/Kolkata" })} IST`,
@@ -205,7 +206,7 @@ export const sendCampaign = inngest.createFunction(
       }).eq("id", campaignId);
       await sendCampaignNotification({
         to: getCampaignNotificationEmail(),
-        subject: `Campaign completed — ${counts.sent} sent, ${counts.failed} failed`,
+        subject: `Campaign completed — ${campaign.name} — ${counts.sent} sent, ${counts.failed} failed`,
         body: [
           `Campaign: ${campaign.name}`,
           `Sender: ${campaign.sender_email}`,

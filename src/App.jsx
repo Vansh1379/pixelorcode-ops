@@ -1215,6 +1215,9 @@ function BulkFireView({
   const [sendAsList, setSendAsList] = useState([]);
   const [campaigns, setCampaigns] = useState([]);
   const [isStartingCampaign, setIsStartingCampaign] = useState(false);
+  // Name of the most recently uploaded playbook file (without extension), so it
+  // can be shown alongside each background campaign. Persisted across reloads.
+  const [playbookFileName, setPlaybookFileName] = useState(() => localStorage.getItem("playbookFileName") || "");
   const [sendTiming, setSendTiming] = useState("now");
   const [scheduledLocal, setScheduledLocal] = useState(() => toIstDateTimeLocal(Date.now() + 60 * 60 * 1000));
   const [fromAddress, setFromAddress] = useState(() => localStorage.getItem("gmailFromAddress") || "");
@@ -1342,6 +1345,10 @@ function BulkFireView({
     if (!file) return;
     setIsParsing(true);
     setErrorMsg("");
+    // Remember the uploaded file's name (minus extension) to label campaigns.
+    const uploadedListName = file.name.replace(/\.[^.]+$/, "").trim();
+    setPlaybookFileName(uploadedListName);
+    localStorage.setItem("playbookFileName", uploadedListName);
     try {
       const parsed = await parseDocx(file);
       
@@ -1473,13 +1480,19 @@ function BulkFireView({
       return;
     }
 
+    // Label the campaign with the lead list / uploaded file name so it's easy to
+    // tell campaigns apart in the Background Campaigns table. Prefer the uploaded
+    // file name; otherwise fall back to the distinct list(s) of the fired leads.
+    const firedLists = Array.from(new Set(leadsToFire.map((l) => l.list).filter(Boolean)));
+    const listLabel = playbookFileName || firedLists.join(", ") || "Playbook";
+
     setIsStartingCampaign(true);
     setErrorMsg("");
     try {
       const result = await apiRequest("/api/campaigns", {
         method: "POST",
         body: JSON.stringify({
-          name: `${selectedStep.toUpperCase()} · ${new Date().toLocaleString("en-IN")}`,
+          name: `${listLabel} · ${selectedStep.toUpperCase()} · ${new Date().toLocaleString("en-IN")}`,
           sequenceStep: selectedStep,
           provider,
           connectionId: connection?.connectionId || null,

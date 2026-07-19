@@ -1,4 +1,5 @@
 {
+  "framework": "vite",
   "functions": {
     "api/inngest.js": {
       "maxDuration": 300
