@@ -33,6 +33,7 @@ import {
   Square,
   Flame,
   Eye,
+  EyeOff,
 } from "lucide-react";
 import pixelorCodeLogo from "./assets/pixelorcode-profile.png";
 import {
@@ -509,6 +510,7 @@ function LinkButton({ href, children }) {
 function AuthGate({ onDemoMode }) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [message, setMessage] = useState("");
   const [isSending, setIsSending] = useState(false);
 
@@ -544,7 +546,18 @@ function AuthGate({ onDemoMode }) {
         </label>
         <label>
           Password
-          <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" autoComplete="current-password" required />
+          <div className="password-input-wrap">
+            <input type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="Your password" autoComplete="current-password" required />
+            <button
+              type="button"
+              className="password-toggle"
+              onClick={() => setShowPassword((current) => !current)}
+              aria-label={showPassword ? "Hide password" : "Show password"}
+              title={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? <EyeOff size={17} /> : <Eye size={17} />}
+            </button>
+          </div>
         </label>
         <button className="button primary" type="submit" disabled={isSending}>{isSending ? "Signing in..." : "Sign in"}</button>
         <button className="button ghost" type="button" onClick={onDemoMode}>View safe demo</button>
